@@ -1,0 +1,31 @@
+{
+  "name": "@kiri/client",
+  "version": "0.2.4",
+  "type": "module",
+  "description": "Typed Node client for the persistent Kiri Git engine",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "generate": "node generate.mjs",
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.mjs"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "json-schema-to-typescript": "15.0.4",
+    "typescript": "5.8.3"
+  }
+}
