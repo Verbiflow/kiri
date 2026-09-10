@@ -1,0 +1,28 @@
+[package]
+name = "kiri-service"
+description = "Embeddable repository coordination and typed Kiri sidecar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kiri-engine"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "=1.0.98"
+base64 = "=0.22.1"
+futures = "=0.3.32"
+kiri-core = { path = "../kiri-core", features = ["schema"] }
+kiri-analysis = { path = "../kiri-analysis", features = ["schema"] }
+schemars = "=1.0.4"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "sync", "io-std", "io-util", "time", "fs"] }
+
+[dev-dependencies]
+tempfile = "=3.19.1"
