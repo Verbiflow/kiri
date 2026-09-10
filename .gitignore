@@ -1,0 +1,7 @@
+/target/
+.DS_Store
+*.profraw
+/assets/brand/*.zip
+__pycache__/
+node_modules/
+/packages/client/dist/

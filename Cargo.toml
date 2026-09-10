@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/kiri-core", "crates/kiri-analysis", "crates/kiri-ai", "crates/kiri-service", "crates/kiri-tui", "crates/kiri-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
