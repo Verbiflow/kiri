@@ -1,0 +1,28 @@
+[package]
+name = "kiri-cli"
+description = "Fast, AI-native Git client for your terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kiri"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+kiri-core = { path = "../kiri-core" }
+kiri-ai = { path = "../kiri-ai" }
+kiri-tui = { path = "../kiri-tui" }
+anyhow = "=1.0.98"
+serde_json = "=1.0.150"
+clap = { version = "=4.5.37", features = ["derive", "env"] }
+tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "signal"] }
+serde = "=1.0.228"
+
+[dev-dependencies]
+kiri-analysis = { path = "../kiri-analysis" }
+tempfile = "=3.19.1"
