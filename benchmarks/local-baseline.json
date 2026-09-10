@@ -1,0 +1,69 @@
+{
+  "platform": "macOS-26.6.2-arm64",
+  "terminal": { "columns": 160, "rows": 42 },
+  "methodology": "Same disposable repositories and selected patch; actual PTY screen markers. First process run excluded from warm medians; four warm runs with rotated client order. No OS cache flush. HEAD and staged changes verified after every client. RSS is parent-only at patch visibility, not peak memory or completed background highlighting.",
+  "binary_sha256": {
+    "kiri": "8c1ee920ff4de2451bd73a223c9c70f836da4fd2c2d14da554e749a2e1cc0470",
+    "lumen": "0a40567029957a7e35c1a86da87ab16ac29172bb4e4aae83f2106247c92cdc0a",
+    "gitui": "f7cff1c8e85d7d9dad493feb54c020dfb81d15f5b105d887603823a0be443baf"
+  },
+  "visible_patch_ms": [
+    { "files": 100, "kiri": { "first": 652.880, "warm": [52.544, 73.072, 90.837, 71.139], "median": 72.106 }, "gitui": { "first": 25.940, "warm": [14.311, 32.322, 15.485, 19.816], "median": 17.651 }, "lumen": { "first": 785.297, "warm": [534.745, 841.110, 588.431, 570.331], "median": 579.381 } },
+    { "files": 5000, "kiri": { "first": 308.610, "warm": [271.530, 169.996, 322.544, 180.002], "median": 225.766 }, "gitui": { "first": 139.246, "warm": [101.378, 118.840, 169.905, 167.022], "median": 142.931 }, "lumen": { "first": 8632.496, "warm": [5961.716, 6057.388, 7120.323, 7150.727], "median": 6588.856 } }
+  ],
+  "sidecar": {
+    "files": 5000,
+    "runs": 20,
+    "engine_handshake_ms": 13.251,
+    "startup_scope": "Engine spawn and protocol handshake only; excludes Node module loading and validator compilation.",
+    "methodology": "Persistent release engine through generated Node client. No rendering or models. Git Trace2 enabled for process counts. Native Git is a subprocess baseline, not another app. Samples run on a shared development machine; not a universal ranking.",
+    "fresh_status": { "p50_ms": 262.568, "p95_ms": 381.612, "git_processes": 20 },
+    "cached_status": { "p50_ms": 3.886, "p95_ms": 21.314, "git_processes": 0 },
+    "cached_preview": { "p50_ms": 0.198, "p95_ms": 0.376, "git_processes": 0 },
+    "native_git_status": { "p50_ms": 219.265, "p95_ms": 265.148, "git_processes": 20 }
+  },
+  "source_install_check": {
+    "platform": "macOS-arm64",
+    "profile": "release, thin LTO, one codegen unit, symbols stripped",
+    "kiri_bytes": 16617424,
+    "engine_bytes": 2520064,
+    "checks": ["Fresh-prefix source installation", "Installed CLI help", "Installed engine schema", "Real PTY staging and commit smoke", "Installed-engine Node integration tests"]
+  },
+  "comparison_backend": { "gitui_version": "0.28.0", "working_status": "asyncgit uses gix 0.75 for index/worktree status; confirmed in its source, not inferred from timings" },
+  "capture_probe": {
+    "files": 100,
+    "elapsed_ms": 821.838,
+    "git_processes": 121,
+    "evidence_bytes": 20263,
+    "unique_chunks": 100,
+    "estimated_model_calls": 10,
+    "actual_model_calls": 0,
+    "methodology": "Single read-only working-tree capture, not a latency distribution. Trace2 counts subprocesses. Reveals per-file patch-process overhead; do not extrapolate timing linearly."
+  },
+  "large_staged_capture_after_fix": {
+    "selected_files": 9099,
+    "patch_bytes": 179051536,
+    "elapsed_ms": 3171.755,
+    "source_chunks": 9424,
+    "estimated_cold_calls": 359,
+    "actual_model_calls": 0,
+    "git_processes": 41,
+    "patch_processes": 21,
+    "index_unchanged": true,
+    "before_observation": { "source": "User-provided screenshot", "files": 9099, "patch_mib_rounded": 170.8, "source_chunks": 17499, "estimated_calls": 11545, "duration": "Reported as minutes; no precise before timing recorded" },
+    "scope": "One local staged-capture run. Same selected-file count and patch size as the report. No model inference. Request estimates are not actual provider usage."
+  },
+  "compare_rpc_after_cache_fix": {
+    "files": 5000,
+    "runs": 20,
+    "p50_ms": 0.215417,
+    "p95_ms": 0.466958,
+    "git_processes": 0,
+    "contemporaneous_fresh_status_p50_ms": 2775.451,
+    "contemporaneous_native_git_p50_ms": 3114.312,
+    "cached_status_git_processes": 5,
+    "scope": "Measures the Compare RPC used by Mako, not rendering. Other phases in this run were much slower than the earlier baseline, including native Git. Status-cache TTL expired during the run; do not present all phases as cache hits or infer a fresh-status speedup."
+  },
+  "status_trace_observation": { "git_total_ms": 231.285, "index_refresh_ms": 205.710, "files_scanned": 5000, "scope": "One saved Trace2 status sample, not an aggregate." },
+  "limitations": ["Small local sample", "No live-provider semantic accuracy or cost comparison", "No peak-memory or total process-tree memory comparison", "GitUI remains faster for startup to visible patch in this fixture"]
+}
