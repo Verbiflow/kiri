@@ -1,0 +1,9 @@
+# Kiri icon concepts
+
+Generated with the built-in image generation tool. These are concepts for selection, not production icon exports.
+
+Left to right: split prism, folded ribbon, three leaves, portal, stack.
+
+## Prompt
+
+Create a premium brand exploration sheet for Kiri, a Rust Git client. Exactly FIVE distinct icon variants arranged horizontally across a wide landscape image, evenly sized and spaced, each with its own small number 1 through 5 below. Dark charcoal background, exquisite studio-quality metallic silver objects, deliberate crisp ordered pixel dithering in shadows and midtones, broad chrome highlights. No letters, no K, no wordmarks. Each symbol must have a bold simple distinctive silhouette and work as a small desktop icon. Five truly different concepts: 1. SPLIT PRISM: a single compact beveled silver wedge splitting into two tips, precise branching negative space, abstract sculptural fork, no Git node diagram. 2. FOLDED RIBBON: a thick silver strip folded into a compact angular loop, like folded metal or origami, asymmetric but balanced. 3. THREE LEAVES: three bold rounded blade-like silver forms fanning from one base, restrained botanical-industrial motif, simple iconic silhouette. 4. PORTAL: a thick rounded diamond-shaped chrome ring with a clean offset slit, sculptural and minimal. 5. STACK: three offset rounded silver slabs forming a stepped compact sculptural stack, evocative of commits, graphic and clean. Keep all five visually distinct. Same material, scale, lighting, and fine halftone dithering across the family. Present each symbol on its own very subtle graphite rounded square tile. Large symbols with plenty of detail, generous spacing. Only text is small clean numbers 1, 2, 3, 4, 5 directly below the corresponding icons. Beautiful editorial brand design presentation, not busy, not glossy generic clipart, no colored glow, no extra symbols.
