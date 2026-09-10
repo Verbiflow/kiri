@@ -1,0 +1,143 @@
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import platform
+import pty
+import select
+import statistics
+import struct
+import subprocess
+import tempfile
+import termios
+import time
+from pathlib import Path
+from verify_tui import Screen
+
+
+def git(repo, *args):
+    return subprocess.check_output(["git", *args], cwd=repo, env=environment(), stderr=subprocess.DEVNULL)
+
+
+def environment():
+    return dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_OPTIONAL_LOCKS="0", GIT_AUTHOR_NAME="Benchmark", GIT_AUTHOR_EMAIL="bench@example.invalid", GIT_COMMITTER_NAME="Benchmark", GIT_COMMITTER_EMAIL="bench@example.invalid", TERM="xterm-256color", COLORTERM="truecolor")
+
+
+def fixture(parent, count):
+    repo = parent / f"files-{count}"
+    repo.mkdir()
+    (repo / "bulk").mkdir()
+    git(repo, "init", "-q")
+    (repo / "000_main.rs").write_text("fn prior_value() -> u32 { 1 }\n")
+    for index in range(count - 1):
+        (repo / "bulk" / f"file-{index:06}.rs").write_text(f"fn file_{index}() -> u32 {{ 1 }}\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "Fixture baseline")
+    (repo / "000_main.rs").write_text("fn observed_after_731() -> u32 { 2 }\n")
+    for index in range(count - 1):
+        (repo / "bulk" / f"file-{index:06}.rs").write_text(f"fn file_{index}() -> u32 {{ 2 }}\n")
+    return repo
+
+
+def measure(name, binary, repo, output, number):
+    config = output / f"{name}-config"
+    config.mkdir(exist_ok=True)
+    env = dict(environment(), XDG_CONFIG_HOME=str(config), XDG_CACHE_HOME=str(config), KIRI_CONFIG_DIR=str(config))
+    env.pop("NO_COLOR", None)
+    commands = {"kiri": [binary, "-C", str(repo)], "lumen": [binary, "diff", "--theme", "dracula"], "gitui": [binary]}
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 160, 0, 0))
+    screen = Screen(160, 42)
+    started = time.perf_counter()
+    process = subprocess.Popen(commands[name], cwd=repo, env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+    os.close(slave)
+    inventory = patch = None
+    transcript = bytearray()
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if select.select([master], [], [], 0.01)[0]:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                at = (time.perf_counter() - started) * 1000
+                transcript.extend(data)
+                for query, answer in [(b"\x1b]11;?", b"\x1b]11;rgb:1010/1010/1010\x07"), (b"\x1b[6n", b"\x1b[1;1R"), (b"\x1b[c", b"\x1b[?1;2c"), (b"\x1b[?u", b"\x1b[?0u")]:
+                    if query in data:
+                        os.write(master, answer)
+                screen.feed(data)
+                text = screen.text()
+                if inventory is None and "000_main.rs" in text:
+                    inventory = at
+                if "observed_after_731" in text:
+                    patch = at
+                    break
+            if process.poll() is not None:
+                break
+        rss = None
+        if process.poll() is None:
+            measured = subprocess.run(["ps", "-p", str(process.pid), "-o", "rss="], capture_output=True, text=True)
+            if measured.returncode == 0 and measured.stdout.strip().isdigit():
+                rss = int(measured.stdout.strip())
+        (output / f"{name}-{number}.txt").write_text(screen.text())
+        (output / f"{name}-{number}.ansi").write_bytes(transcript)
+        os.write(master, b"q")
+        end = time.monotonic() + 2
+        while process.poll() is None and time.monotonic() < end:
+            if select.select([master], [], [], 0.02)[0]:
+                try:
+                    os.read(master, 65536)
+                except OSError:
+                    break
+        return {"inventory_ms": inventory, "visible_patch_ms": patch, "timed_out": patch is None, "parent_rss_at_ready_kib": rss, "read_only_keys": "q"}
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        os.close(master)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--kiri", required=True)
+    parser.add_argument("--lumen", required=True)
+    parser.add_argument("--gitui", required=True)
+    parser.add_argument("--files", type=int, nargs="+", default=[100, 5000])
+    parser.add_argument("--runs", type=int, default=5)
+    args = parser.parse_args()
+    output = Path(tempfile.mkdtemp(prefix="kiri-client-benchmark-"))
+    binaries = {name: str(Path(getattr(args, name)).resolve()) for name in ("kiri", "lumen", "gitui")}
+    report = {"platform": platform.platform(), "terminal": {"columns": 160, "rows": 42}, "cache_policy": "No OS cache flush. First process run recorded separately; later runs rotate client order.", "binaries": binaries, "scenarios": []}
+    report["sha256"] = {}
+    for name, binary in binaries.items():
+        with open(binary, "rb") as executable:
+            report["sha256"][name] = hashlib.file_digest(executable, "sha256").hexdigest()
+    for count in args.files:
+        repo = fixture(output, count)
+        head = git(repo, "rev-parse", "HEAD")
+        scenario = {"files": count, "runs": {name: [] for name in binaries}}
+        for number in range(args.runs):
+            names = list(binaries)
+            names = names[number % len(names):] + names[:number % len(names)]
+            for name in names:
+                record = measure(name, binaries[name], repo, output, f"{count}-{number}")
+                scenario["runs"][name].append(record)
+                assert git(repo, "rev-parse", "HEAD") == head
+                assert git(repo, "diff", "--cached", "--name-only") == b""
+                print(json.dumps({"files": count, "client": name, "run": number, **record}), flush=True)
+        scenario["warm_medians_ms"] = {name: {metric: statistics.median(values) if (values := [run[metric] for run in runs[1:] if run[metric] is not None]) else None for metric in ("inventory_ms", "visible_patch_ms")} for name, runs in scenario["runs"].items()}
+        report["scenarios"].append(scenario)
+        (output / "report.json").write_text(json.dumps(report, indent=2))
+    print(json.dumps({"report": str(output / "report.json")}, indent=2))
+
+
+if __name__ == "__main__":
+    main()
