@@ -1,0 +1,509 @@
+use crate::{
+    diff::{DiffDocument, LARGE_FILE_BYTES, PREVIEW_BYTES},
+    model::{ChangeKind, DiffSide, FileChange, RepoPath, RepoStatus, terminal_text},
+    process::{self, Output},
+    status::parse_status,
+};
+use anyhow::{Context, Result, bail};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+use tokio::process::Command;
+
+#[derive(Clone, Debug)]
+pub struct Repository {
+    root: PathBuf,
+    objects: Option<std::sync::Arc<crate::review::ObjectStore>>,
+}
+
+impl Repository {
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let candidate = Self {
+            root: path.as_ref().to_path_buf(),
+            objects: None,
+        };
+        let bytes = candidate
+            .git(&["rev-parse", "--show-toplevel"])
+            .await
+            .context("Open a Git working tree, not a bare repository or an ordinary folder")?;
+        let root = path_from_git(&bytes)?;
+        Ok(Self {
+            root: tokio::fs::canonicalize(root).await?,
+            objects: None,
+        })
+    }
+
+    pub async fn discover(path: impl AsRef<Path>) -> Result<Option<Self>> {
+        let candidate = Self {
+            root: path.as_ref().to_path_buf(),
+            objects: None,
+        };
+        let mut command = candidate.command();
+        command.args(["rev-parse", "--show-toplevel"]);
+        let output = candidate
+            .execute(command, None, 65536, Duration::from_secs(15))
+            .await?;
+        if output.status.code() == Some(128)
+            && (output.stderr.starts_with(b"fatal: not a git repository")
+                || output
+                    .stderr
+                    .starts_with(b"fatal: this operation must be run in a work tree"))
+        {
+            return Ok(None);
+        }
+        let root = path_from_git(&checked(output)?)?;
+        Ok(Some(Self {
+            root: tokio::fs::canonicalize(root).await?,
+            objects: None,
+        }))
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn with_objects(&self, objects: std::sync::Arc<crate::review::ObjectStore>) -> Self {
+        Self {
+            root: self.root.clone(),
+            objects: Some(objects),
+        }
+    }
+
+    pub fn command(&self) -> Command {
+        let mut command = Command::new("git");
+        command
+            .arg("--no-pager")
+            .arg("--no-optional-locks")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["-c", "core.fsmonitor=false", "-c", "color.ui=false"])
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("LC_ALL", "C");
+        for key in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_EXTERNAL_DIFF",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ] {
+            command.env_remove(key);
+        }
+        if let Some(store) = &self.objects {
+            command
+                .env("GIT_OBJECT_DIRECTORY", &store.objects)
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &store.alternates);
+        }
+        command
+    }
+
+    pub(crate) async fn execute(
+        &self,
+        command: Command,
+        input: Option<&[u8]>,
+        limit: usize,
+        timeout: Duration,
+    ) -> Result<Output> {
+        process::run(command, input, limit, timeout).await
+    }
+
+    pub(crate) async fn mutate(
+        &self,
+        command: Command,
+        input: Option<&[u8]>,
+        timeout: Duration,
+    ) -> Result<()> {
+        let output = process::run_mutation(command, input, timeout).await?;
+        if !output.status.success() {
+            let diagnostic = if output.stderr_excerpt.is_empty() {
+                &output.stdout_excerpt
+            } else {
+                &output.stderr_excerpt
+            };
+            bail!(
+                "Git command failed ({}): {}{}",
+                output.status,
+                crate::model::terminal_message(String::from_utf8_lossy(diagnostic).trim()),
+                if output.logs_abbreviated {
+                    " (log excerpt)"
+                } else {
+                    ""
+                }
+            );
+        }
+        Ok(())
+    }
+
+    pub async fn git(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let mut command = self.command();
+        command.args(args);
+        checked(
+            self.execute(command, None, 16 * 1024 * 1024, Duration::from_secs(15))
+                .await?,
+        )
+    }
+
+    pub async fn git_path(&self, name: &str) -> Result<PathBuf> {
+        let output = self
+            .git(&["rev-parse", "--path-format=absolute", "--git-path", name])
+            .await?;
+        path_from_git(&output)
+    }
+
+    pub async fn status(&self) -> Result<RepoStatus> {
+        self.read_status("--untracked-files=all").await
+    }
+
+    pub async fn tracked_status(&self) -> Result<RepoStatus> {
+        self.read_status("--untracked-files=no").await
+    }
+
+    async fn read_status(&self, untracked: &str) -> Result<RepoStatus> {
+        let raw = self
+            .git(&[
+                "-c",
+                "status.renames=false",
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--branch",
+                untracked,
+                "--ignore-submodules=dirty",
+            ])
+            .await?;
+        let status = parse_status(&raw)?;
+        if status.files.len() <= 128
+            && status
+                .files
+                .iter()
+                .any(|file| file.staged == Some(ChangeKind::Added))
+            && status
+                .files
+                .iter()
+                .any(|file| file.staged == Some(ChangeKind::Deleted))
+        {
+            let mut command = self.command();
+            command.args([
+                "-c",
+                "status.renames=true",
+                "status",
+                "--porcelain=v2",
+                "-z",
+                "--branch",
+                untracked,
+                "--ignore-submodules=dirty",
+            ]);
+            if let Ok(output) = self
+                .execute(command, None, 16 * 1024 * 1024, Duration::from_secs(1))
+                .await
+                && output.status.success()
+                && !output.truncated
+            {
+                return parse_status(&output.stdout);
+            }
+        }
+        Ok(status)
+    }
+
+    pub async fn untracked_files(&self) -> Result<Vec<FileChange>> {
+        let raw = self
+            .git(&["ls-files", "--others", "--exclude-standard", "-z"])
+            .await?;
+        raw.split(|b| *b == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                Ok(FileChange {
+                    path: RepoPath::new(path.to_vec())?,
+                    original_path: None,
+                    staged: None,
+                    worktree: Some(ChangeKind::Untracked),
+                    submodule: false,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn diff(
+        &self,
+        file: &FileChange,
+        side: DiffSide,
+        large: bool,
+    ) -> Result<DiffDocument> {
+        if file.conflicted() {
+            return Ok(DiffDocument::notice(
+                "Merge conflict. Resolve this file in your editor, then stage it.",
+            ));
+        }
+        if file.kind(side).is_none() {
+            return Ok(DiffDocument::notice("No changes on this side."));
+        }
+        if file.submodule {
+            return Ok(DiffDocument::notice(
+                "Submodule changed. Open its workspace to review the nested repository.",
+            ));
+        }
+        if side == DiffSide::Worktree
+            && let Ok(meta) =
+                tokio::fs::symlink_metadata(self.root.join(file.path.to_path_buf())).await
+        {
+            if meta.len() > LARGE_FILE_BYTES && !large {
+                return Ok(DiffDocument::notice(format!(
+                    "Large file: {:.1} MiB. Press L for a bounded patch preview. Other files are ready to review.",
+                    meta.len() as f64 / 1048576.0
+                )));
+            }
+            if file.worktree == Some(ChangeKind::Untracked) && meta.file_type().is_symlink() {
+                return Ok(DiffDocument::notice(
+                    "New symbolic link. Stage the file to review its link target; Kiri does not follow it.",
+                ));
+            }
+        }
+        let mut command = self.command();
+        command.args([
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            "--diff-algorithm=myers",
+            "--no-indent-heuristic",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--unified=3",
+        ]);
+        let untracked = side == DiffSide::Worktree && file.worktree == Some(ChangeKind::Untracked);
+        if untracked {
+            command
+                .args(["--no-index", "--", "/dev/null"])
+                .arg(file.path.to_path_buf());
+        } else {
+            if side == DiffSide::Staged {
+                command.arg("--cached");
+            }
+            command.arg("--").arg(file.path.to_path_buf());
+            if let Some(original) = &file.original_path {
+                command.arg(original.to_path_buf());
+            }
+        }
+        let output = self
+            .execute(
+                command,
+                None,
+                PREVIEW_BYTES,
+                Duration::from_secs(if large { 10 } else { 2 }),
+            )
+            .await?;
+        if !(output.truncated
+            || output.status.success()
+            || untracked && output.status.code() == Some(1))
+        {
+            bail!(
+                "Git diff failed: {}",
+                terminal_text(&String::from_utf8_lossy(&output.stderr))
+            );
+        }
+        Ok(DiffDocument::parse(output.stdout, output.truncated))
+    }
+
+    pub async fn stage(&self, paths: &[RepoPath]) -> Result<()> {
+        if paths.is_empty() {
+            bail!("Select at least one file");
+        }
+        let _lock = crate::storage::FileLock::acquire(self.git_path("kiri-operation.lock").await?)?;
+        let (tracked, untracked) = self.staging_paths(paths).await?;
+        for (paths, update) in [(tracked, true), (untracked, false)] {
+            if paths.is_empty() {
+                continue;
+            }
+            let mut command = self.command();
+            command.arg("add");
+            if update {
+                command.arg("--update");
+            }
+            command.args(["--pathspec-from-file=-", "--pathspec-file-nul"]);
+            self.mutate(
+                command,
+                Some(&pathspec_input(&paths)),
+                Duration::from_secs(30),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn staging_paths(&self, paths: &[RepoPath]) -> Result<(Vec<RepoPath>, Vec<RepoPath>)> {
+        let mut tracked = std::collections::HashSet::new();
+        let mut untracked = std::collections::HashSet::new();
+        let mut start = 0;
+        while start < paths.len() {
+            let mut end = start;
+            let mut bytes = 0;
+            while end < paths.len() && bytes + paths[end].bytes().len() < 48 * 1024 {
+                bytes += paths[end].bytes().len() + 1;
+                end += 1;
+            }
+            if end == start {
+                bail!("Selected path exceeds the staging argument budget");
+            }
+            let mut command = self.command();
+            command.args([
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-t",
+                "-z",
+                "--",
+            ]);
+            for path in &paths[start..end] {
+                command.arg(path.to_path_buf());
+            }
+            let output = checked(
+                self.execute(command, None, 16 * 1024 * 1024, Duration::from_secs(15))
+                    .await?,
+            )?;
+            for record in output
+                .split(|byte| *byte == 0)
+                .filter(|record| !record.is_empty())
+            {
+                if record.get(1) != Some(&b' ') {
+                    bail!("Malformed staging inventory");
+                }
+                let path = RepoPath::new(record[2..].to_vec())?;
+                match record[0] {
+                    b'H' | b'S' | b'M' => {
+                        tracked.insert(path);
+                    }
+                    b'?' => {
+                        untracked.insert(path);
+                    }
+                    _ => bail!("Unexpected staging inventory kind"),
+                }
+            }
+            start = end;
+        }
+        untracked.retain(|path| !tracked.contains(path));
+        Ok((
+            tracked.into_iter().collect(),
+            untracked.into_iter().collect(),
+        ))
+    }
+
+    pub async fn unstage(&self, paths: &[RepoPath]) -> Result<()> {
+        if paths.is_empty() {
+            bail!("Select at least one file");
+        }
+        let _lock = crate::storage::FileLock::acquire(self.git_path("kiri-operation.lock").await?)?;
+        let born = self.head().await?.is_some();
+        let mut command = self.command();
+        if born {
+            command.args(["restore", "--staged"]);
+        } else {
+            command.args(["rm", "--cached", "--quiet", "--force"]);
+        }
+        command.args(["--pathspec-from-file=-", "--pathspec-file-nul"]);
+        self.mutate(
+            command,
+            Some(&pathspec_input(paths)),
+            Duration::from_secs(30),
+        )
+        .await
+    }
+
+    pub async fn stage_hunk(
+        &self,
+        file: &FileChange,
+        side: DiffSide,
+        preview: &DiffDocument,
+        hunk: usize,
+    ) -> Result<()> {
+        let _lock = crate::storage::FileLock::acquire(self.git_path("kiri-operation.lock").await?)?;
+        let current = self.diff(file, side, false).await?;
+        if current.fingerprint != preview.fingerprint {
+            bail!("This file changed since the preview. Refresh and review it again.");
+        }
+        let patch = preview.hunk_patch(hunk)?;
+        let mut command = self.command();
+        command.args(["apply", "--cached", "--recount", "--whitespace=nowarn"]);
+        if side == DiffSide::Staged {
+            command.arg("--reverse");
+        }
+        command.arg("-");
+        self.mutate(command, Some(&patch), Duration::from_secs(15))
+            .await
+    }
+
+    pub async fn head_ref(&self) -> Result<Option<String>> {
+        let mut command = self.command();
+        command.args(["symbolic-ref", "--quiet", "HEAD"]);
+        let output = self
+            .execute(command, None, 4096, Duration::from_secs(5))
+            .await?;
+        if output.status.success() {
+            return Ok(Some(String::from_utf8(output.stdout)?.trim().to_owned()));
+        }
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+        checked(output)?;
+        bail!("Could not read the active branch")
+    }
+
+    pub async fn head(&self) -> Result<Option<String>> {
+        let mut command = self.command();
+        command.args(["rev-parse", "--verify", "--quiet", "HEAD"]);
+        let output = self
+            .execute(command, None, 1024, Duration::from_secs(5))
+            .await?;
+        if output.status.success() {
+            return Ok(Some(String::from_utf8(output.stdout)?.trim().to_owned()));
+        }
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+        checked(output)?;
+        bail!("Could not read HEAD")
+    }
+}
+
+pub(crate) fn pathspec_input(paths: &[RepoPath]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for path in paths {
+        bytes.extend_from_slice(path.bytes());
+        bytes.push(0);
+    }
+    bytes
+}
+
+pub(crate) fn checked(output: Output) -> Result<Vec<u8>> {
+    if output.truncated {
+        bail!("Git output exceeded its safety limit. Narrow the selection.");
+    }
+    if !output.status.success() {
+        bail!(
+            "Git: {}",
+            terminal_text(String::from_utf8_lossy(&output.stderr).trim())
+        );
+    }
+    Ok(output.stdout)
+}
+
+fn path_from_git(bytes: &[u8]) -> Result<PathBuf> {
+    let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    if bytes.is_empty() {
+        bail!("Git returned an empty path");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(PathBuf::from(OsString::from(std::str::from_utf8(bytes)?)))
+    }
+}
