@@ -1,0 +1,25 @@
+[package]
+name = "kiri-analysis"
+description = "Provider-neutral Git evidence, analysis graphs, and reviewed proposals"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+schema = ["dep:schemars", "kiri-core/schema"]
+
+[dependencies]
+schemars = { version = "=1.0.4", optional = true }
+anyhow = "=1.0.98"
+base64 = "=0.22.1"
+futures = "=0.3.32"
+kiri-core = { path = "../kiri-core" }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+tempfile = "=3.19.1"
+tokio = { version = "=1.52.3", features = ["rt", "sync", "fs", "io-util", "macros", "time"] }
