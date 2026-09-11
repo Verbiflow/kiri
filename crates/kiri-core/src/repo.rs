@@ -19,6 +19,18 @@ pub struct Repository {
     /// The repository opted into Git's builtin file system monitor. Hook-style monitors stay
     /// disabled because Kiri never runs commands named by repository configuration.
     fsmonitor: bool,
+    /// In-process reader, present when gitoxide could open the working tree. Status runs here
+    /// first; Git computes anything the reader declines.
+    native: Option<crate::native::Native>,
+}
+
+/// Which implementation answers status reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatusBackend {
+    /// gitoxide in-process, falling back to Git for unsupported repository states.
+    Native,
+    /// `git status` subprocess only.
+    Git,
 }
 
 impl Repository {
@@ -30,11 +42,16 @@ impl Repository {
             root: path.as_ref().to_path_buf(),
             objects: None,
             fsmonitor: false,
+            native: None,
         }
     }
 
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let candidate = Self::at(path);
+        let path = path.as_ref().to_path_buf();
+        if let Some(repo) = Self::open_native(path.clone()).await? {
+            return Ok(repo);
+        }
+        let candidate = Self::at(&path);
         let (bytes, fsmonitor) = tokio::join!(
             candidate.git(&["rev-parse", "--show-toplevel"]),
             candidate.builtin_fsmonitor()
@@ -47,11 +64,25 @@ impl Repository {
             root: tokio::fs::canonicalize(root).await?,
             objects: None,
             fsmonitor,
+            native: None,
         })
     }
 
     pub async fn discover(path: impl AsRef<Path>) -> Result<Option<Self>> {
-        let candidate = Self::at(path);
+        let path = path.as_ref().to_path_buf();
+        if native_enabled() {
+            let probe = path.clone();
+            match tokio::task::spawn_blocking(move || crate::native::Native::discover(&probe))
+                .await?
+            {
+                Ok(crate::native::Discovery::Repository(found)) => {
+                    return Ok(Some(Self::from_native(*found).await?));
+                }
+                Ok(crate::native::Discovery::NotRepository) => return Ok(None),
+                Err(_) => {}
+            }
+        }
+        let candidate = Self::at(&path);
         let mut command = candidate.command();
         command.args(["rev-parse", "--show-toplevel"]);
         let (output, fsmonitor) = tokio::join!(
@@ -72,7 +103,55 @@ impl Repository {
             root: tokio::fs::canonicalize(root).await?,
             objects: None,
             fsmonitor,
+            native: None,
         }))
+    }
+
+    /// Open through gitoxide without any subprocess. `None` means gitoxide could not open the
+    /// path and Git should decide whether it is a repository at all.
+    async fn open_native(path: PathBuf) -> Result<Option<Self>> {
+        if !native_enabled() {
+            return Ok(None);
+        }
+        match tokio::task::spawn_blocking(move || crate::native::Native::discover(&path)).await? {
+            Ok(crate::native::Discovery::Repository(found)) => {
+                Ok(Some(Self::from_native(*found).await?))
+            }
+            Ok(crate::native::Discovery::NotRepository) | Err(_) => Ok(None),
+        }
+    }
+
+    async fn from_native(found: crate::native::Discovered) -> Result<Self> {
+        Ok(Self {
+            root: tokio::fs::canonicalize(&found.root).await?,
+            objects: None,
+            fsmonitor: found.builtin_fsmonitor,
+            native: Some(found.native),
+        })
+    }
+
+    /// Force status reads through one backend. Tests use this to compare implementations.
+    pub fn with_status_backend(mut self, backend: StatusBackend) -> Self {
+        if backend == StatusBackend::Git {
+            self.native = None;
+        }
+        self
+    }
+
+    pub fn status_backend(&self) -> StatusBackend {
+        if self.native.is_some() {
+            StatusBackend::Native
+        } else {
+            StatusBackend::Git
+        }
+    }
+
+    /// The in-process status, or `None` when this repository state is left to Git.
+    pub async fn native_status(&self, untracked: bool) -> Result<Option<RepoStatus>> {
+        let Some(native) = self.native.clone() else {
+            return Ok(None);
+        };
+        tokio::task::spawn_blocking(move || native.status(untracked)).await?
     }
 
     /// True only when `core.fsmonitor` is the boolean `true`, which selects Git's builtin
@@ -102,6 +181,7 @@ impl Repository {
             root: self.root.clone(),
             objects: Some(objects),
             fsmonitor: self.fsmonitor,
+            native: None,
         }
     }
 
@@ -205,19 +285,27 @@ impl Repository {
     }
 
     async fn read_status(&self, untracked: &str) -> Result<RepoStatus> {
-        let raw = self
-            .git(&[
-                "-c",
-                "status.renames=false",
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--branch",
-                untracked,
-                "--ignore-submodules=dirty",
-            ])
-            .await?;
-        let status = parse_status(&raw)?;
+        let status = match self
+            .native_status(untracked == "--untracked-files=all")
+            .await
+        {
+            Ok(Some(status)) => status,
+            Ok(None) | Err(_) => {
+                let raw = self
+                    .git(&[
+                        "-c",
+                        "status.renames=false",
+                        "status",
+                        "--porcelain=v2",
+                        "-z",
+                        "--branch",
+                        untracked,
+                        "--ignore-submodules=dirty",
+                    ])
+                    .await?;
+                parse_status(&raw)?
+            }
+        };
         if status.files.len() <= 128
             && status
                 .files
@@ -567,6 +655,11 @@ impl Repository {
         checked(output)?;
         bail!("Could not read HEAD")
     }
+}
+
+/// `KIRI_STATUS_BACKEND=git` disables the in-process reader for a session.
+fn native_enabled() -> bool {
+    std::env::var_os("KIRI_STATUS_BACKEND").is_none_or(|value| value != "git")
 }
 
 pub(crate) fn builtin_fsmonitor_setting(code: Option<i32>, stdout: &[u8]) -> bool {

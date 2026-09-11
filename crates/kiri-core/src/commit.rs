@@ -77,8 +77,7 @@ impl Repository {
     }
 
     pub async fn verify_snapshot(&self, snapshot: &StagedSnapshot) -> Result<()> {
-        let object_id =
-            |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
+        let object_id = crate::model::is_object_id;
         if !object_id(&snapshot.tree)
             || snapshot.head.as_ref().is_some_and(|s| !object_id(s))
             || snapshot.index_digest.len() != 64

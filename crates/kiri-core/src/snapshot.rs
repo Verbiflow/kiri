@@ -159,8 +159,7 @@ fn validate_trees(base: &str, tree: &str) -> Result<()> {
     ensure!(
         [base, tree]
             .iter()
-            .all(|value| matches!(value.len(), 40 | 64)
-                && value.bytes().all(|byte| byte.is_ascii_hexdigit())),
+            .all(|value| crate::model::is_object_id(value)),
         "Invalid snapshot tree identity"
     );
     Ok(())

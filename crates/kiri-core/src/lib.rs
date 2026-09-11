@@ -1,6 +1,7 @@
 pub mod commit;
 pub mod diff;
 pub mod model;
+pub mod native;
 pub mod process;
 pub mod repo;
 pub mod review;

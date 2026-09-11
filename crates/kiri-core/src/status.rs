@@ -80,8 +80,8 @@ pub fn parse_status(bytes: &[u8]) -> Result<RepoStatus> {
 
 fn oid(field: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(field).ok()?;
-    let valid = matches!(text.len(), 40 | 64) && text.bytes().all(|byte| byte.is_ascii_hexdigit());
-    (valid && text.bytes().any(|byte| byte != b'0')).then(|| text.to_owned())
+    (crate::model::is_object_id(text) && text.bytes().any(|byte| byte != b'0'))
+        .then(|| text.to_owned())
 }
 
 fn kind(byte: u8) -> Result<Option<ChangeKind>> {

@@ -207,18 +207,18 @@ impl WorktreeStamp {
         }
         #[cfg(not(unix))]
         {
-            let seconds = |time: std::io::Result<std::time::SystemTime>| {
+            let stamp = |time: std::io::Result<std::time::SystemTime>| {
                 time.ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+                    .map(|d| (d.as_secs() as i64, i64::from(d.subsec_nanos())))
                     .unwrap_or((0, 0))
             };
             Self {
                 size: metadata.len(),
-                modified: seconds(metadata.modified()),
-                changed: seconds(metadata.created()),
+                modified: stamp(metadata.modified()),
+                changed: (0, 0),
                 inode: 0,
-                mode: u32::from(metadata.permissions().readonly()),
+                mode: 0,
             }
         }
     }
@@ -233,6 +233,11 @@ pub struct RepoStatus {
     pub ahead: usize,
     pub behind: usize,
     pub files: Vec<FileChange>,
+}
+
+/// A full SHA-1 or SHA-256 object name in hex.
+pub fn is_object_id(text: &str) -> bool {
+    matches!(text.len(), 40 | 64) && text.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub fn digest(bytes: &[u8]) -> String {
