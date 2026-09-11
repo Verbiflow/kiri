@@ -38,28 +38,28 @@ impl Service {
             None => Ok(None),
         }
     }
-    /// Open a repository and read its inventory with the Git calls overlapped: the tracked
-    /// status starts immediately from the unverified path, `rev-parse` and the monitor
-    /// configuration run alongside it, and the untracked scan starts as soon as the root is
-    /// known. `partial` receives the tracked changes before untracked files are listed.
+    /// Open a repository and read its inventory. Discovery and status run in-process when
+    /// gitoxide can read the repository, so nothing is spawned before the first inventory. When
+    /// Git must answer instead, the tracked status and the untracked scan run concurrently.
+    /// `partial` receives the tracked changes before untracked files are listed.
     pub async fn open_with_inventory(
         &self,
         path: impl AsRef<Path>,
         partial: impl FnOnce(&Arc<RepositoryService>, RepoStatus) + Send,
     ) -> Result<(Arc<RepositoryService>, StatusSnapshot)> {
-        let candidate = Repository::at(&path);
-        let tracked =
-            crate::jobs::AbortOnDrop::spawn(async move { candidate.tracked_status().await });
         let repo = Repository::open(path).await?;
-        let scanner = repo.clone();
-        let untracked =
-            crate::jobs::AbortOnDrop::spawn(async move { scanner.untracked_files().await });
+        let native = repo.status_backend() == kiri_core::repo::StatusBackend::Native;
         let entry = self.adopt(repo).await?;
-        if entry.status_cache.lock().await.is_some() {
-            drop((tracked, untracked));
+        if native || entry.status_cache.lock().await.is_some() {
             let status = entry.inventory(true, |_| {}).await?;
             return Ok((entry, status));
         }
+        let scanner = entry.repo.clone();
+        let tracked =
+            crate::jobs::AbortOnDrop::spawn(async move { scanner.tracked_status().await });
+        let scanner = entry.repo.clone();
+        let untracked =
+            crate::jobs::AbortOnDrop::spawn(async move { scanner.untracked_files().await });
         let mut status = tracked.await??;
         partial(&entry, status.clone());
         status.files.extend(untracked.await??);
@@ -257,7 +257,9 @@ impl RepositoryService {
             {
                 return Ok(status.clone());
             }
-            let status = if cached.is_none() {
+            let phased = cached.is_none()
+                && self.repo.status_backend() == kiri_core::repo::StatusBackend::Git;
+            let status = if phased {
                 let mut status = self.repo.tracked_status().await?;
                 partial(status.clone());
                 status.files.extend(self.repo.untracked_files().await?);
@@ -272,44 +274,40 @@ impl RepositoryService {
                 *at = Instant::now();
                 return Ok(previous.clone());
             }
-            if self
-                .revision
-                .compare_exchange(revision, revision + 1, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                continue;
+            if let Some(result) = self.store(&mut cached, revision, status) {
+                return Ok(result);
             }
-            let result = StatusSnapshot {
-                revision: revision + 1,
-                status: Arc::new(status),
-            };
-            *cached = Some((Instant::now(), result.clone()));
-            return Ok(result);
         }
     }
-    /// Record a status that was read outside `inventory`, for example during an overlapped
-    /// open. If another reader published first, the newer of the two views wins by re-reading.
-    async fn publish(&self, status: RepoStatus) -> Result<StatusSnapshot> {
-        let mut cached = self.status_cache.lock().await;
-        if cached.is_some() {
-            drop(cached);
-            return self.inventory(true, |_| {}).await;
-        }
-        let revision = self.revision.load(Ordering::Acquire);
-        if self
-            .revision
+    /// Publish `status` as `revision + 1` unless a write moved the revision meanwhile.
+    fn store(
+        &self,
+        cached: &mut Option<(Instant, StatusSnapshot)>,
+        revision: u64,
+        status: RepoStatus,
+    ) -> Option<StatusSnapshot> {
+        self.revision
             .compare_exchange(revision, revision + 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            drop(cached);
-            return self.inventory(true, |_| {}).await;
-        }
+            .ok()?;
         let result = StatusSnapshot {
             revision: revision + 1,
             status: Arc::new(status),
         };
         *cached = Some((Instant::now(), result.clone()));
-        Ok(result)
+        Some(result)
+    }
+    /// Record a status that was read outside `inventory`, for example during an overlapped
+    /// open. If another reader published first or a write intervened, re-read instead.
+    async fn publish(&self, status: RepoStatus) -> Result<StatusSnapshot> {
+        let mut cached = self.status_cache.lock().await;
+        if cached.is_none() {
+            let revision = self.revision.load(Ordering::Acquire);
+            if let Some(result) = self.store(&mut cached, revision, status) {
+                return Ok(result);
+            }
+        }
+        drop(cached);
+        self.inventory(true, |_| {}).await
     }
     /// Start a status read in the background so the first caller finds it cached or in flight.
     pub fn warm(self: &Arc<Self>) {

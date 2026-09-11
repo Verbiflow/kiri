@@ -129,23 +129,33 @@ async fn repository_handles_share_reads_and_order_admitted_mutations() -> Result
     Ok(())
 }
 
+fn git(temp: &tempfile::TempDir, args: &[&str]) -> Result<()> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(temp.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "Kiri Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Kiri Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
 fn init(temp: &tempfile::TempDir) -> Result<()> {
     for args in [
-        vec!["init", "-q"],
-        vec!["add", "."],
-        vec!["commit", "-qm", "Fixture"],
+        ["init", "-q"].as_slice(),
+        &["add", "."],
+        &["commit", "-qm", "Fixture"],
     ] {
-        let output = Command::new("git")
-            .args(&args)
-            .current_dir(temp.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "Kiri Test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-            .env("GIT_COMMITTER_NAME", "Kiri Test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-            .output()?;
-        anyhow::ensure!(output.status.success(), "Fixture setup failed");
+        git(temp, args)?;
     }
     Ok(())
 }
@@ -197,18 +207,8 @@ async fn restaging_between_polls_changes_the_staged_identity() -> Result<()> {
     let temp = tempfile::tempdir()?;
     fs::write(temp.path().join("file.txt"), "one\n")?;
     init(&temp)?;
-    let git = |args: &[&str]| -> Result<()> {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(temp.path())
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()?;
-        anyhow::ensure!(output.status.success(), "git failed");
-        Ok(())
-    };
     fs::write(temp.path().join("file.txt"), "two\n")?;
-    git(&["add", "file.txt"])?;
+    git(&temp, &["add", "file.txt"])?;
     let service = Service::default();
     let repo = service.open(temp.path()).await?;
     let first = repo.status(true).await?;
@@ -217,7 +217,7 @@ async fn restaging_between_polls_changes_the_staged_identity() -> Result<()> {
         .await?;
     assert!(String::from_utf8_lossy(&staged.raw).contains("+two"));
     fs::write(temp.path().join("file.txt"), "three\n")?;
-    git(&["add", "file.txt"])?;
+    git(&temp, &["add", "file.txt"])?;
     let second = repo.status(true).await?;
     assert_ne!(second.revision, first.revision);
     assert_eq!(second.status.files[0].staged, first.status.files[0].staged);
@@ -248,17 +248,17 @@ async fn overlapped_open_reports_tracked_changes_before_untracked_files() -> Res
                 Some((entry.root().to_path_buf(), status));
         })
         .await?;
-    let (root, tracked) = partial
-        .into_inner()
-        .unwrap_or_else(|e| e.into_inner())
-        .ok_or_else(|| anyhow::anyhow!("partial inventory missing"))?;
-    assert_eq!(root, repo.root());
     assert_eq!(repo.root(), fs::canonicalize(temp.path())?);
-    assert_eq!(tracked.files.len(), 1);
-    assert_eq!(tracked.files[0].path.bytes(), b"tracked.txt");
     assert_eq!(snapshot.status.files.len(), 2);
+    assert_eq!(snapshot.status.files[0].path.bytes(), b"tracked.txt");
     assert_eq!(snapshot.status.files[1].path.bytes(), b"nested/new.txt");
     assert_eq!(*snapshot.status, *repo.status(true).await?.status);
+    // The phased callback only exists on the Git path; when it fires it carries tracked changes.
+    if let Some((root, tracked)) = partial.into_inner().unwrap_or_else(|e| e.into_inner()) {
+        assert_eq!(root, repo.root());
+        assert_eq!(tracked.files.len(), 1);
+        assert_eq!(tracked.files[0].path.bytes(), b"tracked.txt");
+    }
     let plain = tempfile::tempdir()?;
     assert!(
         service
