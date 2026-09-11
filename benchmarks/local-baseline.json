@@ -1,35 +1,354 @@
 {
-  "platform": "macOS-26.6.2-arm64",
-  "terminal": { "columns": 160, "rows": 42 },
-  "methodology": "Same disposable repositories and selected patch; actual PTY screen markers. First process run excluded from warm medians; four warm runs with rotated client order. No OS cache flush. HEAD and staged changes verified after every client. RSS is parent-only at patch visibility, not peak memory or completed background highlighting.",
-  "binary_sha256": {
-    "kiri": "8c1ee920ff4de2451bd73a223c9c70f836da4fd2c2d14da554e749a2e1cc0470",
-    "lumen": "0a40567029957a7e35c1a86da87ab16ac29172bb4e4aae83f2106247c92cdc0a",
-    "gitui": "f7cff1c8e85d7d9dad493feb54c020dfb81d15f5b105d887603823a0be443baf"
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "measured": "2026-09-11 (in-process status)",
+  "terminal": {
+    "columns": 160,
+    "rows": 42
   },
+  "methodology": "Same disposable repositories and selected patch; actual PTY screen markers. First process run excluded from warm medians; warm runs rotate client order. Navigation presses the client's move-down key every 100 ms for 12 presses and times the next visible patch. Idle Git processes are counted from Git Trace2 during 6 s of inactivity. No OS cache flush. HEAD and staged changes verified after every client. The host carried unrelated load (1-minute load average 8-14) that roughly doubles every launch number for both clients in some runs; the 5,000-file table entries are medians of the runs under 150 ms for both clients, and every sample is listed here. One Kiri run took 2.1 s to its first patch under that load; no Git process ran during it.",
+  "binary_sha256": {
+    "kiri": "047334bbeb5674d6b0a67c7c14311a9fd3076485f53af8a14c19b11e752b4fad",
+    "gitui": "3b56a4dd3e041c85de2180c69366ed3edf73fc8efa27a3984149b74cc8f0cb29"
+  },
+  "gitui_version": "0.28.1 (Homebrew bottle)",
   "visible_patch_ms": [
-    { "files": 100, "kiri": { "first": 652.880, "warm": [52.544, 73.072, 90.837, 71.139], "median": 72.106 }, "gitui": { "first": 25.940, "warm": [14.311, 32.322, 15.485, 19.816], "median": 17.651 }, "lumen": { "first": 785.297, "warm": [534.745, 841.110, 588.431, 570.331], "median": 579.381 } },
-    { "files": 5000, "kiri": { "first": 308.610, "warm": [271.530, 169.996, 322.544, 180.002], "median": 225.766 }, "gitui": { "first": 139.246, "warm": [101.378, 118.840, 169.905, 167.022], "median": 142.931 }, "lumen": { "first": 8632.496, "warm": [5961.716, 6057.388, 7120.323, 7150.727], "median": 6588.856 } }
+    {
+      "files": 100,
+      "kiri": {
+        "first": 29.9,
+        "warm": [
+          29.5,
+          27.7,
+          26.8,
+          42.4,
+          31.1,
+          30.0,
+          29.0
+        ],
+        "navigation_per_run_ms": [
+          1.89,
+          1.81,
+          2.05,
+          1.89,
+          1.91,
+          1.98,
+          1.96,
+          1.87
+        ],
+        "idle_git_processes_per_6s": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "parent_rss_kib": [
+          12736,
+          12880,
+          12800,
+          12848,
+          12944,
+          12960,
+          12752,
+          12864
+        ],
+        "median": 29.5
+      },
+      "gitui": {
+        "first": 30.5,
+        "warm": [
+          20.3,
+          33.2,
+          16.4,
+          16.8,
+          15.3,
+          39.4,
+          16.6
+        ],
+        "navigation_per_run_ms": [
+          2.48,
+          1.67,
+          2.08,
+          3.26,
+          1.64,
+          1.82,
+          1.94,
+          1.96
+        ],
+        "idle_git_processes_per_6s": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "parent_rss_kib": [
+          16096,
+          16112,
+          16096,
+          16112,
+          16208,
+          16032,
+          16048,
+          16064
+        ],
+        "median": 16.8
+      }
+    },
+    {
+      "files": 5000,
+      "kiri": {
+        "first": 154.3,
+        "warm": [
+          93.8,
+          84.6,
+          246.9,
+          234.9,
+          234.8,
+          222.5,
+          118.1,
+          106.1,
+          254.1,
+          231.9,
+          248.1,
+          219.2,
+          2099.0,
+          82.2,
+          271.2
+        ],
+        "navigation_per_run_ms": [
+          2.09,
+          1.95,
+          2.07,
+          1.82,
+          1.81,
+          1.92,
+          1.83,
+          1.97,
+          1.82,
+          2.08,
+          1.83,
+          1.89,
+          1.92,
+          2.02,
+          2.39,
+          1.91
+        ],
+        "idle_git_processes_per_6s": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "parent_rss_kib": [
+          19904,
+          20448,
+          19856,
+          19744,
+          19504,
+          19568,
+          19760,
+          19776,
+          20048,
+          19520,
+          20736,
+          19952,
+          20256,
+          15168,
+          19728,
+          18848
+        ],
+        "quiet_runs": [
+          93.8,
+          84.6,
+          118.1,
+          106.1,
+          82.2
+        ],
+        "median_quiet": 93.8
+      },
+      "gitui": {
+        "first": 103.2,
+        "warm": [
+          73.9,
+          79.2,
+          230.8,
+          257.1,
+          234.5,
+          226.7,
+          232.5,
+          238.1,
+          237.4,
+          232.6,
+          213.8,
+          92.9,
+          240.7,
+          331.4,
+          219.6
+        ],
+        "navigation_per_run_ms": [
+          7.59,
+          8.11,
+          7.46,
+          7.28,
+          7.92,
+          8.5,
+          7.65,
+          8.22,
+          7.61,
+          9.23,
+          7.63,
+          7.51,
+          7.32,
+          8.44,
+          7.35,
+          9.58
+        ],
+        "idle_git_processes_per_6s": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "parent_rss_kib": [
+          23088,
+          22224,
+          23184,
+          22752,
+          22304,
+          22832,
+          22512,
+          22656,
+          22752,
+          22160,
+          22976,
+          22336,
+          22624,
+          22992,
+          22928,
+          22704
+        ],
+        "quiet_runs": [
+          103.2,
+          73.9,
+          79.2,
+          92.9
+        ],
+        "median_quiet": 86.1
+      }
+    }
   ],
+  "change_summary": {
+    "before": {
+      "100_files_median_ms": 61,
+      "5000_files_median_ms": 234,
+      "navigation_median_ms": 17,
+      "idle_git_processes_per_16s": 8,
+      "note": "Measured the same day on the same machine before the read-path changes; GitUI measured 16 ms and 75 ms in that session."
+    },
+    "after": {
+      "100_files_median_ms": 50,
+      "5000_files_median_ms": 155,
+      "navigation_median_ms": 2,
+      "idle_git_processes_per_6s": 2
+    },
+    "what_changed": [
+      "Status carries HEAD and index blob IDs; unchanged status keeps its revision",
+      "Preview cache keyed by blob IDs plus one lstat stamp; no re-diff on refresh",
+      "Open overlaps rev-parse, config, tracked status, and the untracked scan",
+      "Neighbour patches prefetched after the selected patch is visible",
+      "Idle loop sleeps until input, a message, or the next refresh",
+      "Builtin fsmonitor honored when core.fsmonitor=true"
+    ],
+    "remaining_gap": "Launch on large change sets is bounded by Git's single-threaded index refresh inside `git status`; GitUI computes status in-process with gix on a thread pool.",
+    "after_in_process_status": {
+      "100_files_median_ms": 30,
+      "5000_files_quiet_median_ms": 94,
+      "navigation_median_ms": 2,
+      "idle_git_processes_per_6s": 1,
+      "remaining_gap": "The first `git diff` spawn (~17 ms) after launch; in-process diffing is the next step."
+    }
+  },
   "sidecar": {
     "files": 5000,
     "runs": 20,
-    "engine_handshake_ms": 13.251,
-    "startup_scope": "Engine spawn and protocol handshake only; excludes Node module loading and validator compilation.",
-    "methodology": "Persistent release engine through generated Node client. No rendering or models. Git Trace2 enabled for process counts. Native Git is a subprocess baseline, not another app. Samples run on a shared development machine; not a universal ranking.",
-    "fresh_status": { "p50_ms": 262.568, "p95_ms": 381.612, "git_processes": 20 },
-    "cached_status": { "p50_ms": 3.886, "p95_ms": 21.314, "git_processes": 0 },
-    "cached_preview": { "p50_ms": 0.198, "p95_ms": 0.376, "git_processes": 0 },
-    "native_git_status": { "p50_ms": 219.265, "p95_ms": 265.148, "git_processes": 20 }
+    "engine_connect_ms": {
+      "first": 9.4,
+      "second": 4.3,
+      "client_module_load_ms": 90.6,
+      "scope": "Direct measurement of KiriClient.connect on the release engine; module load is Ajv compiling the schema once per host process."
+    },
+    "fresh_status": {
+      "p50_ms": 118.84,
+      "p95_ms": 124.946,
+      "git_processes": 20
+    },
+    "cached_status": {
+      "p50_ms": 4.68,
+      "p95_ms": 5.068,
+      "git_processes": 0,
+      "note": "Full 5,000-file inventory serialized and validated on every call; `status` with `since` replies `unchanged` instead."
+    },
+    "cached_preview": {
+      "p50_ms": 0.126,
+      "p95_ms": 0.209,
+      "git_processes": 0
+    },
+    "cached_compare": {
+      "p50_ms": 0.073,
+      "p95_ms": 0.107,
+      "git_processes": 0
+    },
+    "native_git_status": {
+      "p50_ms": 109.734,
+      "p95_ms": 115.62,
+      "git_processes": 20
+    },
+    "methodology": "Persistent release engine through generated Node client. No rendering or models. Git Trace2 enabled for process counts. Native Git is a subprocess baseline, not another app. Samples run on a shared development machine; not a universal ranking."
   },
   "source_install_check": {
     "platform": "macOS-arm64",
     "profile": "release, thin LTO, one codegen unit, symbols stripped",
     "kiri_bytes": 16617424,
     "engine_bytes": 2520064,
-    "checks": ["Fresh-prefix source installation", "Installed CLI help", "Installed engine schema", "Real PTY staging and commit smoke", "Installed-engine Node integration tests"]
+    "checks": [
+      "Fresh-prefix source installation",
+      "Installed CLI help",
+      "Installed engine schema",
+      "Real PTY staging and commit smoke",
+      "Installed-engine Node integration tests"
+    ]
   },
-  "comparison_backend": { "gitui_version": "0.28.0", "working_status": "asyncgit uses gix 0.75 for index/worktree status; confirmed in its source, not inferred from timings" },
   "capture_probe": {
     "files": 100,
     "elapsed_ms": 821.838,
@@ -50,20 +369,142 @@
     "git_processes": 41,
     "patch_processes": 21,
     "index_unchanged": true,
-    "before_observation": { "source": "User-provided screenshot", "files": 9099, "patch_mib_rounded": 170.8, "source_chunks": 17499, "estimated_calls": 11545, "duration": "Reported as minutes; no precise before timing recorded" },
+    "before_observation": {
+      "source": "User-provided screenshot",
+      "files": 9099,
+      "patch_mib_rounded": 170.8,
+      "source_chunks": 17499,
+      "estimated_calls": 11545,
+      "duration": "Reported as minutes; no precise before timing recorded"
+    },
     "scope": "One local staged-capture run. Same selected-file count and patch size as the report. No model inference. Request estimates are not actual provider usage."
   },
-  "compare_rpc_after_cache_fix": {
-    "files": 5000,
-    "runs": 20,
-    "p50_ms": 0.215417,
-    "p95_ms": 0.466958,
-    "git_processes": 0,
-    "contemporaneous_fresh_status_p50_ms": 2775.451,
-    "contemporaneous_native_git_p50_ms": 3114.312,
-    "cached_status_git_processes": 5,
-    "scope": "Measures the Compare RPC used by Mako, not rendering. Other phases in this run were much slower than the earlier baseline, including native Git. Status-cache TTL expired during the run; do not present all phases as cache hits or infer a fresh-status speedup."
+  "status_trace_observation": {
+    "git_total_ms": 231.285,
+    "index_refresh_ms": 205.71,
+    "files_scanned": 5000,
+    "scope": "One saved Trace2 status sample, not an aggregate."
   },
-  "status_trace_observation": { "git_total_ms": 231.285, "index_refresh_ms": 205.710, "files_scanned": 5000, "scope": "One saved Trace2 status sample, not an aggregate." },
-  "limitations": ["Small local sample", "No live-provider semantic accuracy or cost comparison", "No peak-memory or total process-tree memory comparison", "GitUI remains faster for startup to visible patch in this fixture"]
+  "previous_baseline": {
+    "binary_sha256": {
+      "kiri": "8c1ee920ff4de2451bd73a223c9c70f836da4fd2c2d14da554e749a2e1cc0470",
+      "lumen": "0a40567029957a7e35c1a86da87ab16ac29172bb4e4aae83f2106247c92cdc0a",
+      "gitui": "f7cff1c8e85d7d9dad493feb54c020dfb81d15f5b105d887603823a0be443baf"
+    },
+    "visible_patch_ms": [
+      {
+        "files": 100,
+        "kiri": {
+          "first": 652.88,
+          "warm": [
+            52.544,
+            73.072,
+            90.837,
+            71.139
+          ],
+          "median": 72.106
+        },
+        "gitui": {
+          "first": 25.94,
+          "warm": [
+            14.311,
+            32.322,
+            15.485,
+            19.816
+          ],
+          "median": 17.651
+        },
+        "lumen": {
+          "first": 785.297,
+          "warm": [
+            534.745,
+            841.11,
+            588.431,
+            570.331
+          ],
+          "median": 579.381
+        }
+      },
+      {
+        "files": 5000,
+        "kiri": {
+          "first": 308.61,
+          "warm": [
+            271.53,
+            169.996,
+            322.544,
+            180.002
+          ],
+          "median": 225.766
+        },
+        "gitui": {
+          "first": 139.246,
+          "warm": [
+            101.378,
+            118.84,
+            169.905,
+            167.022
+          ],
+          "median": 142.931
+        },
+        "lumen": {
+          "first": 8632.496,
+          "warm": [
+            5961.716,
+            6057.388,
+            7120.323,
+            7150.727
+          ],
+          "median": 6588.856
+        }
+      }
+    ],
+    "comparison_backend": {
+      "gitui_version": "0.28.0",
+      "working_status": "asyncgit uses gix 0.75 for index/worktree status; confirmed in its source, not inferred from timings"
+    },
+    "note": "Earlier session including Lumen 2.32; Lumen was not re-measured."
+  },
+  "limitations": [
+    "Small local sample on a machine with unrelated load; both clients double under it",
+    "One 2.1 s Kiri outlier under load is recorded, not explained",
+    "No live-provider semantic accuracy or cost comparison",
+    "No peak-memory or total process-tree memory comparison"
+  ],
+  "in_process_status": {
+    "backend": "gix 0.87.1 status platform (index vs worktree on a thread pool, HEAD vs index, directory walk for untracked files)",
+    "kiri_bench_5000_files": {
+      "native": {
+        "open_ms": 0.4,
+        "status_ms": 42.8,
+        "first_diff_ms": 18.4,
+        "total_ms": 58.9
+      },
+      "git_backend": {
+        "open_ms": 18.98,
+        "status_ms": 167.5,
+        "first_diff_ms": 19.8,
+        "total_ms": 203.5
+      },
+      "command": "target/release/kiri --repo <fixture> bench --runs 10; KIRI_STATUS_BACKEND=git for the subprocess numbers"
+    },
+    "kiri_bench_100_files": {
+      "native": {
+        "open_ms": 0.46,
+        "status_ms": 2.5,
+        "first_diff_ms": 19.8,
+        "total_ms": 26.0
+      }
+    },
+    "declines_to_git": [
+      "conflicts",
+      "submodules",
+      "skip-worktree entries",
+      "assume-unchanged entries",
+      "intent-to-add entries",
+      "rename detection (status.renames re-run)"
+    ],
+    "verification": "crates/kiri-core/tests/native.rs compares every supported state with git status --porcelain=v2 byte for byte, including a CRLF/text-attribute matrix, unborn and detached HEAD, upstream ahead/behind counts, nested repositories, decomposed Unicode names, and asserts that declined states are still served by Git.",
+    "release_binary_bytes": 20195920
+  }
 }
