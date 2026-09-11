@@ -89,6 +89,7 @@ impl Session {
                 }
                 let handle = RepoId(self.id()?);
                 let root = repo.root().to_string_lossy().into_owned();
+                repo.warm();
                 entries.insert(handle, repo);
                 Ok(ResultValue::Opened { repo: handle, root })
             }
@@ -110,8 +111,13 @@ impl Session {
                 }
                 Ok(ResultValue::Ok)
             }
-            Command::Status { repo, fresh } => {
+            Command::Status { repo, fresh, since } => {
                 let status = self.repo(repo).await?.status(fresh).await?;
+                if since == Some(status.revision) {
+                    return Ok(ResultValue::Unchanged {
+                        revision: status.revision,
+                    });
+                }
                 Ok(ResultValue::Status {
                     revision: status.revision,
                     status: (*status.status).clone(),

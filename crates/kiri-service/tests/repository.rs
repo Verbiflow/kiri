@@ -128,3 +128,143 @@ async fn repository_handles_share_reads_and_order_admitted_mutations() -> Result
     );
     Ok(())
 }
+
+fn init(temp: &tempfile::TempDir) -> Result<()> {
+    for args in [
+        vec!["init", "-q"],
+        vec!["add", "."],
+        vec!["commit", "-qm", "Fixture"],
+    ] {
+        let output = Command::new("git")
+            .args(&args)
+            .current_dir(temp.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "Kiri Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Kiri Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+            .output()?;
+        anyhow::ensure!(output.status.success(), "Fixture setup failed");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unchanged_status_keeps_its_revision_and_cached_previews() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    fs::write(temp.path().join("file.txt"), "one\n")?;
+    init(&temp)?;
+    fs::write(temp.path().join("file.txt"), "two\n")?;
+    let service = Service::default();
+    let repo = service.open(temp.path()).await?;
+    let first = repo.status(true).await?;
+    let file = first.status.files[0].clone();
+    assert!(file.index_oid.is_some() && file.head_oid.is_some());
+    let preview = repo.preview(&file, DiffSide::Worktree, false).await?;
+    let again = repo.status(true).await?;
+    assert_eq!(again.revision, first.revision);
+    assert!(Arc::ptr_eq(&again.status, &first.status));
+    let reused = repo.preview(&file, DiffSide::Worktree, false).await?;
+    assert!(Arc::ptr_eq(&preview, &reused));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_edit_with_identical_status_still_refreshes_the_preview() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    fs::write(temp.path().join("file.txt"), "one\n")?;
+    init(&temp)?;
+    fs::write(temp.path().join("file.txt"), "two\n")?;
+    let service = Service::default();
+    let repo = service.open(temp.path()).await?;
+    let file = repo.status(true).await?.status.files[0].clone();
+    let before = repo.preview(&file, DiffSide::Worktree, false).await?;
+    assert!(String::from_utf8_lossy(&before.raw).contains("+two"));
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(temp.path().join("file.txt"), "three\n")?;
+    let status = repo.status(true).await?;
+    let after = repo
+        .preview(&status.status.files[0], DiffSide::Worktree, false)
+        .await?;
+    assert!(String::from_utf8_lossy(&after.raw).contains("+three"));
+    assert!(!Arc::ptr_eq(&before, &after));
+    Ok(())
+}
+
+#[tokio::test]
+async fn restaging_between_polls_changes_the_staged_identity() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    fs::write(temp.path().join("file.txt"), "one\n")?;
+    init(&temp)?;
+    let git = |args: &[&str]| -> Result<()> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(temp.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()?;
+        anyhow::ensure!(output.status.success(), "git failed");
+        Ok(())
+    };
+    fs::write(temp.path().join("file.txt"), "two\n")?;
+    git(&["add", "file.txt"])?;
+    let service = Service::default();
+    let repo = service.open(temp.path()).await?;
+    let first = repo.status(true).await?;
+    let staged = repo
+        .preview(&first.status.files[0], DiffSide::Staged, false)
+        .await?;
+    assert!(String::from_utf8_lossy(&staged.raw).contains("+two"));
+    fs::write(temp.path().join("file.txt"), "three\n")?;
+    git(&["add", "file.txt"])?;
+    let second = repo.status(true).await?;
+    assert_ne!(second.revision, first.revision);
+    assert_eq!(second.status.files[0].staged, first.status.files[0].staged);
+    assert_ne!(
+        second.status.files[0].index_oid,
+        first.status.files[0].index_oid
+    );
+    let restaged = repo
+        .preview(&second.status.files[0], DiffSide::Staged, false)
+        .await?;
+    assert!(String::from_utf8_lossy(&restaged.raw).contains("+three"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn overlapped_open_reports_tracked_changes_before_untracked_files() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    fs::write(temp.path().join("tracked.txt"), "one\n")?;
+    fs::create_dir(temp.path().join("nested"))?;
+    init(&temp)?;
+    fs::write(temp.path().join("tracked.txt"), "two\n")?;
+    fs::write(temp.path().join("nested").join("new.txt"), "new\n")?;
+    let service = Service::default();
+    let partial = std::sync::Mutex::new(None);
+    let (repo, snapshot) = service
+        .open_with_inventory(temp.path().join("nested"), |entry, status| {
+            *partial.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((entry.root().to_path_buf(), status));
+        })
+        .await?;
+    let (root, tracked) = partial
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner())
+        .ok_or_else(|| anyhow::anyhow!("partial inventory missing"))?;
+    assert_eq!(root, repo.root());
+    assert_eq!(repo.root(), fs::canonicalize(temp.path())?);
+    assert_eq!(tracked.files.len(), 1);
+    assert_eq!(tracked.files[0].path.bytes(), b"tracked.txt");
+    assert_eq!(snapshot.status.files.len(), 2);
+    assert_eq!(snapshot.status.files[1].path.bytes(), b"nested/new.txt");
+    assert_eq!(*snapshot.status, *repo.status(true).await?.status);
+    let plain = tempfile::tempdir()?;
+    assert!(
+        service
+            .open_with_inventory(plain.path(), |_, _| {})
+            .await
+            .is_err()
+    );
+    Ok(())
+}

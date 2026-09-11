@@ -3,7 +3,7 @@ use kiri_analysis::proposal::{CommitDraft, CommitPlan};
 use kiri_core::{
     commit::StagedSnapshot,
     diff::DiffDocument,
-    model::{DiffSide, FileChange, RepoPath, RepoStatus},
+    model::{ContentIdentity, DiffSide, FileChange, RepoPath, RepoStatus, WorktreeStamp},
     repo::Repository,
     sync::{SyncAction, SyncTarget},
     workbench::{Comparison, Preview},
@@ -38,6 +38,34 @@ impl Service {
             None => Ok(None),
         }
     }
+    /// Open a repository and read its inventory with the Git calls overlapped: the tracked
+    /// status starts immediately from the unverified path, `rev-parse` and the monitor
+    /// configuration run alongside it, and the untracked scan starts as soon as the root is
+    /// known. `partial` receives the tracked changes before untracked files are listed.
+    pub async fn open_with_inventory(
+        &self,
+        path: impl AsRef<Path>,
+        partial: impl FnOnce(&Arc<RepositoryService>, RepoStatus) + Send,
+    ) -> Result<(Arc<RepositoryService>, StatusSnapshot)> {
+        let candidate = Repository::at(&path);
+        let tracked =
+            crate::jobs::AbortOnDrop::spawn(async move { candidate.tracked_status().await });
+        let repo = Repository::open(path).await?;
+        let scanner = repo.clone();
+        let untracked =
+            crate::jobs::AbortOnDrop::spawn(async move { scanner.untracked_files().await });
+        let entry = self.adopt(repo).await?;
+        if entry.status_cache.lock().await.is_some() {
+            drop((tracked, untracked));
+            let status = entry.inventory(true, |_| {}).await?;
+            return Ok((entry, status));
+        }
+        let mut status = tracked.await??;
+        partial(&entry, status.clone());
+        status.files.extend(untracked.await??);
+        let snapshot = entry.publish(status).await?;
+        Ok((entry, snapshot))
+    }
     async fn adopt(&self, repo: Repository) -> Result<Arc<RepositoryService>> {
         let mut entries = self.repositories.lock().await;
         entries.retain(|_, entry| entry.strong_count() > 0);
@@ -60,7 +88,16 @@ impl Service {
     }
 }
 
-type PreviewKey = (RepoPath, DiffSide, bool);
+/// Previews are addressed by the exact content they were computed from: the blobs Git reported
+/// in status plus one `lstat` of the working file. Unchanged inputs hit the cache across status
+/// refreshes; any edit, staging step, or commit changes the key.
+type PreviewKey = (
+    RepoPath,
+    DiffSide,
+    bool,
+    ContentIdentity,
+    Option<WorktreeStamp>,
+);
 type Reply<T> = oneshot::Sender<Result<T>>;
 type PlanProgress = Box<dyn FnMut(usize, &str) + Send>;
 enum Write {
@@ -228,6 +265,13 @@ impl RepositoryService {
             } else {
                 self.repo.status().await?
             };
+            if let Some((at, previous)) = cached.as_mut()
+                && previous.revision == revision
+                && *previous.status == status
+            {
+                *at = Instant::now();
+                return Ok(previous.clone());
+            }
             if self
                 .revision
                 .compare_exchange(revision, revision + 1, Ordering::AcqRel, Ordering::Acquire)
@@ -235,14 +279,44 @@ impl RepositoryService {
             {
                 continue;
             }
-            let revision = revision + 1;
             let result = StatusSnapshot {
-                revision,
+                revision: revision + 1,
                 status: Arc::new(status),
             };
             *cached = Some((Instant::now(), result.clone()));
             return Ok(result);
         }
+    }
+    /// Record a status that was read outside `inventory`, for example during an overlapped
+    /// open. If another reader published first, the newer of the two views wins by re-reading.
+    async fn publish(&self, status: RepoStatus) -> Result<StatusSnapshot> {
+        let mut cached = self.status_cache.lock().await;
+        if cached.is_some() {
+            drop(cached);
+            return self.inventory(true, |_| {}).await;
+        }
+        let revision = self.revision.load(Ordering::Acquire);
+        if self
+            .revision
+            .compare_exchange(revision, revision + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            drop(cached);
+            return self.inventory(true, |_| {}).await;
+        }
+        let result = StatusSnapshot {
+            revision: revision + 1,
+            status: Arc::new(status),
+        };
+        *cached = Some((Instant::now(), result.clone()));
+        Ok(result)
+    }
+    /// Start a status read in the background so the first caller finds it cached or in flight.
+    pub fn warm(self: &Arc<Self>) {
+        let entry = self.clone();
+        tokio::spawn(async move {
+            let _ = entry.inventory(true, |_| {}).await;
+        });
     }
     pub async fn preview(
         &self,
@@ -250,9 +324,19 @@ impl RepositoryService {
         side: DiffSide,
         large: bool,
     ) -> Result<Arc<DiffDocument>> {
+        let stamp = match side {
+            DiffSide::Worktree => self.repo.worktree_stamp(&file.path).await?,
+            DiffSide::Staged => None,
+        };
         self.previews
             .get(
-                (file.path.clone(), side, large),
+                (
+                    file.path.clone(),
+                    side,
+                    large,
+                    file.content_identity(side),
+                    stamp,
+                ),
                 &self.revision,
                 self.repo.diff(file, side, large),
             )

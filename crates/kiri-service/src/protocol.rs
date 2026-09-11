@@ -66,6 +66,10 @@ pub enum Command {
     Status {
         repo: RepoId,
         fresh: bool,
+        /// Revision the caller already holds. When the repository still reports that revision,
+        /// the reply is `unchanged` instead of the full inventory.
+        #[serde(default)]
+        since: Option<u64>,
     },
     Preview {
         repo: RepoId,
@@ -196,6 +200,9 @@ pub enum ResultValue {
     Status {
         revision: u64,
         status: RepoStatus,
+    },
+    Unchanged {
+        revision: u64,
     },
     Preview {
         patch: Vec<u8>,

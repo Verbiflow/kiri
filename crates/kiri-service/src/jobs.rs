@@ -36,6 +36,16 @@ impl<K: Eq + Hash> TaskGroup<K> {
     pub fn forget(&mut self, key: &K) {
         self.tasks.remove(key);
     }
+    /// Cancel every task whose key fails `keep`, leaving the others running.
+    pub fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        self.tasks.retain(|key, task| {
+            let wanted = keep(key);
+            if !wanted {
+                task.abort();
+            }
+            wanted
+        });
+    }
     pub fn len(&self) -> usize {
         self.tasks
             .values()
@@ -51,5 +61,28 @@ impl<K> Drop for TaskGroup<K> {
         for task in self.tasks.values() {
             task.abort();
         }
+    }
+}
+
+/// A spawned task that is cancelled when its handle is dropped, so overlapped reads never
+/// outlive the request that started them.
+pub struct AbortOnDrop<T>(JoinHandle<T>);
+impl<T: Send + 'static> AbortOnDrop<T> {
+    pub fn spawn(future: impl Future<Output = T> + Send + 'static) -> Self {
+        Self(tokio::spawn(future))
+    }
+}
+impl<T> Future for AbortOnDrop<T> {
+    type Output = Result<T, tokio::task::JoinError>;
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.0).poll(cx)
+    }
+}
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
