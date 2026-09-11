@@ -140,6 +140,12 @@ pub struct FileChange {
     pub staged: Option<ChangeKind>,
     pub worktree: Option<ChangeKind>,
     pub submodule: bool,
+    /// Blob recorded in HEAD for this path, when Git reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_oid: Option<String>,
+    /// Blob recorded in the index for this path, when Git reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_oid: Option<String>,
 }
 
 impl FileChange {
@@ -151,6 +157,70 @@ impl FileChange {
     }
     pub fn conflicted(&self) -> bool {
         self.staged == Some(ChangeKind::Unmerged) || self.worktree == Some(ChangeKind::Unmerged)
+    }
+    /// Exact identity of the content a patch for `side` depends on, excluding the working file.
+    pub fn content_identity(&self, side: DiffSide) -> ContentIdentity {
+        match side {
+            DiffSide::Staged => ContentIdentity {
+                base: self.head_oid.clone(),
+                target: self.index_oid.clone(),
+            },
+            DiffSide::Worktree => ContentIdentity {
+                base: self.index_oid.clone(),
+                target: None,
+            },
+        }
+    }
+}
+
+/// Git object identities a patch was computed from. Two patches with equal identities and an
+/// equal [`WorktreeStamp`] are byte-identical, so they can share one cached document.
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct ContentIdentity {
+    pub base: Option<String>,
+    pub target: Option<String>,
+}
+
+/// Cheap fingerprint of a working file taken with one `lstat`. Any edit that Git would notice
+/// changes at least one of these fields, so previews keyed by a stamp never serve stale content.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WorktreeStamp {
+    pub size: u64,
+    pub modified: (i64, i64),
+    pub changed: (i64, i64),
+    pub inode: u64,
+    pub mode: u32,
+}
+
+impl WorktreeStamp {
+    pub fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Self {
+                size: metadata.len(),
+                modified: (metadata.mtime(), metadata.mtime_nsec()),
+                changed: (metadata.ctime(), metadata.ctime_nsec()),
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let seconds = |time: std::io::Result<std::time::SystemTime>| {
+                time.ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| (d.as_secs() as i64, d.subsec_nanos() as i64))
+                    .unwrap_or((0, 0))
+            };
+            Self {
+                size: metadata.len(),
+                modified: seconds(metadata.modified()),
+                changed: seconds(metadata.created()),
+                inode: 0,
+                mode: u32::from(metadata.permissions().readonly()),
+            }
+        }
     }
 }
 

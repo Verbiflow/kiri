@@ -170,6 +170,8 @@ mod tests {
                     staged: None,
                     worktree: Some(ChangeKind::Modified),
                     submodule: false,
+                    head_oid: None,
+                    index_oid: None,
                 })
             })
             .collect()

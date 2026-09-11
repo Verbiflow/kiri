@@ -233,6 +233,8 @@ impl Repository {
                     staged: None,
                     worktree: Some(crate::model::ChangeKind::Deleted),
                     submodule: false,
+                    head_oid: None,
+                    index_oid: None,
                 });
             }
         }

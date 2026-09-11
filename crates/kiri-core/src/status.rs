@@ -33,6 +33,8 @@ pub fn parse_status(bytes: &[u8]) -> Result<RepoStatus> {
                 staged: None,
                 worktree: Some(ChangeKind::Untracked),
                 submodule: false,
+                head_oid: None,
+                index_oid: None,
             }),
             b'1' | b'2' | b'u' => {
                 let count = match record[0] {
@@ -65,6 +67,8 @@ pub fn parse_status(bytes: &[u8]) -> Result<RepoStatus> {
                         kind(fields[1][1])?
                     },
                     submodule: fields[2].first() == Some(&b'S'),
+                    head_oid: if conflicted { None } else { oid(fields[6]) },
+                    index_oid: if conflicted { None } else { oid(fields[7]) },
                 });
             }
             b'!' => {}
@@ -72,6 +76,12 @@ pub fn parse_status(bytes: &[u8]) -> Result<RepoStatus> {
         }
     }
     Ok(status)
+}
+
+fn oid(field: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(field).ok()?;
+    let valid = matches!(text.len(), 40 | 64) && text.bytes().all(|byte| byte.is_ascii_hexdigit());
+    (valid && text.bytes().any(|byte| byte != b'0')).then(|| text.to_owned())
 }
 
 fn kind(byte: u8) -> Result<Option<ChangeKind>> {
@@ -94,7 +104,11 @@ mod tests {
 
     #[test]
     fn parses_nul_records_without_losing_paths() -> Result<()> {
-        let status = parse_status(b"# branch.oid abc\0# branch.head main\0# branch.ab +2 -3\x001 MM N... 100644 100644 100644 a b path with\nnewline\x002 R. N... 100644 100644 100644 a b R100 new name\0old name\0? untracked\xff\0")?;
+        let head = "1".repeat(40);
+        let index = "2".repeat(40);
+        let mut raw = format!("# branch.oid abc\0# branch.head main\0# branch.ab +2 -3\x001 MM N... 100644 100644 100644 {head} {index} path with\nnewline\x002 R. N... 100644 100644 100644 {head} {index} R100 new name\0old name\0? untracked").into_bytes();
+        raw.extend_from_slice(b"\xff\0");
+        let status = parse_status(&raw)?;
         assert_eq!(status.ahead, 2);
         assert_eq!(status.behind, 3);
         assert_eq!(status.files.len(), 3);
@@ -105,6 +119,23 @@ mod tests {
         );
         assert_eq!(status.files[2].path.bytes(), b"untracked\xff");
         assert!(!status.files[0].path.display().contains('\n'));
+        assert_eq!(status.files[0].head_oid.as_deref(), Some(head.as_str()));
+        assert_eq!(status.files[0].index_oid.as_deref(), Some(index.as_str()));
+        assert_eq!(status.files[1].index_oid.as_deref(), Some(index.as_str()));
+        assert_eq!(status.files[2].head_oid, None);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_objects_have_no_identity() -> Result<()> {
+        let zero = "0".repeat(40);
+        let added = "a".repeat(40);
+        let status = parse_status(
+            format!("1 A. N... 000000 100644 100644 {zero} {added} new.rs\0").as_bytes(),
+        )?;
+        assert_eq!(status.files[0].head_oid, None);
+        assert_eq!(status.files[0].index_oid.as_deref(), Some(added.as_str()));
+        assert!(oid(b"not-hex").is_none());
         Ok(())
     }
 

@@ -1,6 +1,6 @@
 use crate::{
     diff::{DiffDocument, LARGE_FILE_BYTES, PREVIEW_BYTES},
-    model::{ChangeKind, DiffSide, FileChange, RepoPath, RepoStatus, terminal_text},
+    model::{ChangeKind, DiffSide, FileChange, RepoPath, RepoStatus, WorktreeStamp, terminal_text},
     process::{self, Output},
     status::parse_status,
 };
@@ -16,35 +16,49 @@ use tokio::process::Command;
 pub struct Repository {
     root: PathBuf,
     objects: Option<std::sync::Arc<crate::review::ObjectStore>>,
+    /// The repository opted into Git's builtin file system monitor. Hook-style monitors stay
+    /// disabled because Kiri never runs commands named by repository configuration.
+    fsmonitor: bool,
 }
 
 impl Repository {
-    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let candidate = Self {
+    /// A handle for `path` that has not been verified as a working tree. Git resolves the
+    /// repository itself, so status reads work before `open` returns; they run with the
+    /// conservative monitor setting because configuration has not been inspected yet.
+    pub fn at(path: impl AsRef<Path>) -> Self {
+        Self {
             root: path.as_ref().to_path_buf(),
             objects: None,
-        };
-        let bytes = candidate
-            .git(&["rev-parse", "--show-toplevel"])
-            .await
-            .context("Open a Git working tree, not a bare repository or an ordinary folder")?;
-        let root = path_from_git(&bytes)?;
+            fsmonitor: false,
+        }
+    }
+
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let candidate = Self::at(path);
+        let (bytes, fsmonitor) = tokio::join!(
+            candidate.git(&["rev-parse", "--show-toplevel"]),
+            candidate.builtin_fsmonitor()
+        );
+        let root = path_from_git(
+            &bytes
+                .context("Open a Git working tree, not a bare repository or an ordinary folder")?,
+        )?;
         Ok(Self {
             root: tokio::fs::canonicalize(root).await?,
             objects: None,
+            fsmonitor,
         })
     }
 
     pub async fn discover(path: impl AsRef<Path>) -> Result<Option<Self>> {
-        let candidate = Self {
-            root: path.as_ref().to_path_buf(),
-            objects: None,
-        };
+        let candidate = Self::at(path);
         let mut command = candidate.command();
         command.args(["rev-parse", "--show-toplevel"]);
-        let output = candidate
-            .execute(command, None, 65536, Duration::from_secs(15))
-            .await?;
+        let (output, fsmonitor) = tokio::join!(
+            candidate.execute(command, None, 65536, Duration::from_secs(15)),
+            candidate.builtin_fsmonitor()
+        );
+        let output = output?;
         if output.status.code() == Some(128)
             && (output.stderr.starts_with(b"fatal: not a git repository")
                 || output
@@ -57,7 +71,26 @@ impl Repository {
         Ok(Some(Self {
             root: tokio::fs::canonicalize(root).await?,
             objects: None,
+            fsmonitor,
         }))
+    }
+
+    /// True only when `core.fsmonitor` is the boolean `true`, which selects Git's builtin
+    /// daemon. Unset values, `false`, hook paths, and unreadable configuration all read as false.
+    async fn builtin_fsmonitor(&self) -> bool {
+        let mut command = self.base_command();
+        command.args(["config", "--type=bool", "core.fsmonitor"]);
+        match self
+            .execute(command, None, 64, Duration::from_secs(5))
+            .await
+        {
+            Ok(output) => builtin_fsmonitor_setting(output.status.code(), &output.stdout),
+            Err(_) => false,
+        }
+    }
+
+    pub fn uses_builtin_fsmonitor(&self) -> bool {
+        self.fsmonitor
     }
 
     pub fn root(&self) -> &Path {
@@ -68,17 +101,26 @@ impl Repository {
         Self {
             root: self.root.clone(),
             objects: Some(objects),
+            fsmonitor: self.fsmonitor,
         }
     }
 
     pub fn command(&self) -> Command {
+        let mut command = self.base_command();
+        if !self.fsmonitor {
+            command.args(["-c", "core.fsmonitor=false"]);
+        }
+        command.args(["-c", "color.ui=false"]);
+        command
+    }
+
+    fn base_command(&self) -> Command {
         let mut command = Command::new("git");
         command
             .arg("--no-pager")
             .arg("--no-optional-locks")
             .arg("-C")
             .arg(&self.root)
-            .args(["-c", "core.fsmonitor=false", "-c", "color.ui=false"])
             .env("GIT_LITERAL_PATHSPECS", "1")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C");
@@ -209,6 +251,16 @@ impl Repository {
         Ok(status)
     }
 
+    /// One `lstat` of the working file, or `None` when it is absent. Used as part of preview
+    /// cache identity so unchanged files never re-run Git and edited files never serve stale text.
+    pub async fn worktree_stamp(&self, path: &RepoPath) -> Result<Option<WorktreeStamp>> {
+        match tokio::fs::symlink_metadata(self.root.join(path.to_path_buf())).await {
+            Ok(metadata) => Ok(Some(WorktreeStamp::from_metadata(&metadata))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub async fn untracked_files(&self) -> Result<Vec<FileChange>> {
         let raw = self
             .git(&["ls-files", "--others", "--exclude-standard", "-z"])
@@ -222,6 +274,8 @@ impl Repository {
                     staged: None,
                     worktree: Some(ChangeKind::Untracked),
                     submodule: false,
+                    head_oid: None,
+                    index_oid: None,
                 })
             })
             .collect()
@@ -470,6 +524,10 @@ impl Repository {
     }
 }
 
+pub(crate) fn builtin_fsmonitor_setting(code: Option<i32>, stdout: &[u8]) -> bool {
+    code == Some(0) && stdout.trim_ascii() == b"true"
+}
+
 pub(crate) fn pathspec_input(paths: &[RepoPath]) -> Vec<u8> {
     let mut bytes = Vec::new();
     for path in paths {
@@ -505,5 +563,22 @@ fn path_from_git(bytes: &[u8]) -> Result<PathBuf> {
     #[cfg(not(unix))]
     {
         Ok(PathBuf::from(OsString::from(std::str::from_utf8(bytes)?)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builtin_fsmonitor_setting;
+
+    #[test]
+    fn only_the_boolean_true_selects_the_builtin_monitor() {
+        assert!(builtin_fsmonitor_setting(Some(0), b"true\n"));
+        assert!(!builtin_fsmonitor_setting(Some(0), b"false\n"));
+        assert!(!builtin_fsmonitor_setting(Some(1), b""));
+        assert!(!builtin_fsmonitor_setting(Some(128), b""));
+        assert!(!builtin_fsmonitor_setting(
+            Some(0),
+            b".git/hooks/fsmonitor-watchman\n"
+        ));
     }
 }
