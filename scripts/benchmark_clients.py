@@ -43,6 +43,17 @@ def fixture(parent, count):
 
 NAVIGATION = {"kiri": {"prepare": [b"k", b"\r"], "next": b"j"}, "gitui": {"prepare": [], "next": b"\x1b[B"}}
 NAVIGATION_PATTERN = re.compile(r"file_(\d+)\(\) -> u32 \{ 2 \}")
+TERMINAL_REPLIES = [(b"\x1b]11;?", b"\x1b]11;rgb:1010/1010/1010\x07"), (b"\x1b[6n", b"\x1b[1;1R"), (b"\x1b[c", b"\x1b[?1;2c"), (b"\x1b[?u", b"\x1b[?0u")]
+
+
+def answer_queries(master, data):
+    for query, answer in TERMINAL_REPLIES:
+        if query in data:
+            os.write(master, answer)
+
+
+def patch_numbers(text):
+    return {int(match) for match in NAVIGATION_PATTERN.findall(text)}
 
 
 def pump(master, screen, ready, timeout):
@@ -55,9 +66,7 @@ def pump(master, screen, ready, timeout):
                 return None
             if not data:
                 return None
-            for query, answer in [(b"\x1b]11;?", b"\x1b]11;rgb:1010/1010/1010\x07"), (b"\x1b[6n", b"\x1b[1;1R"), (b"\x1b[c", b"\x1b[?1;2c"), (b"\x1b[?u", b"\x1b[?0u")]:
-                if query in data:
-                    os.write(master, answer)
+            answer_queries(master, data)
             screen.feed(data)
             if ready(screen.text()):
                 return (time.perf_counter() - started) * 1000
@@ -71,14 +80,14 @@ def navigation(master, screen, name, presses, cadence):
     for key in keys["prepare"]:
         os.write(master, key)
         pump(master, screen, lambda text: False, 0.15)
-    seen = {int(match) for match in NAVIGATION_PATTERN.findall(screen.text())}
+    seen = patch_numbers(screen.text())
     latencies = []
     for _ in range(presses):
         pump(master, screen, lambda text: False, cadence)
         before = set(seen)
         os.write(master, keys["next"])
-        latency = pump(master, screen, lambda text: bool({int(m) for m in NAVIGATION_PATTERN.findall(text)} - before), 2.0)
-        seen |= {int(match) for match in NAVIGATION_PATTERN.findall(screen.text())}
+        latency = pump(master, screen, lambda text: bool(patch_numbers(text) - before), 2.0)
+        seen |= patch_numbers(screen.text())
         if latency is not None:
             latencies.append(latency)
     return latencies
@@ -111,9 +120,7 @@ def measure(name, binary, repo, output, number, presses, cadence, idle):
                     break
                 at = (time.perf_counter() - started) * 1000
                 transcript.extend(data)
-                for query, answer in [(b"\x1b]11;?", b"\x1b]11;rgb:1010/1010/1010\x07"), (b"\x1b[6n", b"\x1b[1;1R"), (b"\x1b[c", b"\x1b[?1;2c"), (b"\x1b[?u", b"\x1b[?0u")]:
-                    if query in data:
-                        os.write(master, answer)
+                answer_queries(master, data)
                 screen.feed(data)
                 text = screen.text()
                 if inventory is None and "000_main.rs" in text:
