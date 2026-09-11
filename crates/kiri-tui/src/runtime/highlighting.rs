@@ -24,20 +24,10 @@ impl Runtime {
         mut diff: Arc<DiffView>,
         reset: bool,
     ) {
-        let previous = &self.app.workspaces[workspace];
-        let colored = match &previous.diff {
-            Load::Ready(existing)
-                if previous.displayed_path.as_ref() == Some(&(path.clone(), side))
-                    && existing.document.fingerprint == diff.document.fingerprint
-                    && matches!(existing.syntax, SyntaxState::Ready { .. }) =>
-            {
-                Some(existing.syntax.clone())
-            }
-            _ => previous
-                .cached_diff(&diff.document.fingerprint)
-                .filter(|cached| matches!(cached.syntax, SyntaxState::Ready { .. }))
-                .map(|cached| cached.syntax.clone()),
-        };
+        let colored = self.app.workspaces[workspace]
+            .cached_diff(&diff.document.fingerprint)
+            .filter(|cached| matches!(cached.syntax, SyntaxState::Ready { .. }))
+            .map(|cached| cached.syntax.clone());
         if let Some(syntax) = colored
             && !matches!(diff.syntax, SyntaxState::Ready { .. })
         {

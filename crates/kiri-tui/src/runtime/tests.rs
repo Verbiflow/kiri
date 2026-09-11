@@ -235,20 +235,27 @@ async fn prefetch_targets_neighbouring_files_only_when_a_repository_is_open() ->
     let targets: Vec<_> = PREFETCH_OFFSETS
         .iter()
         .filter_map(|offset| view.selected.checked_add_signed(*offset))
-        .filter_map(|row| view.visible.get(row))
-        .map(|&node| view.tree.nodes[node].name.clone())
+        .filter_map(|row| view.file_at(row))
+        .map(|file| file.path.display())
         .collect();
-    assert_eq!(targets, vec!["file_01.rs", "file_02.rs", "src"]);
+    assert_eq!(targets, vec!["src/file_01.rs", "src/file_02.rs"]);
     Ok(())
 }
 
 #[tokio::test]
 async fn idle_wake_waits_for_the_next_refresh_instead_of_polling() {
-    let runtime = runtime();
-    assert!(runtime.next_refresh() <= Duration::from_millis(1));
-    let mut fresh = self::runtime();
-    fresh.refreshed = Instant::now();
-    assert!(fresh.next_refresh() > Duration::from_secs(4));
+    let mut runtime = runtime();
+    assert!(runtime.idle_wake() <= Duration::from_millis(1));
+    runtime.app.modal = Modal::Help;
+    assert!(runtime.idle_wake() >= REFRESH_INTERVAL);
+    runtime.app.modal = Modal::None;
+    runtime
+        .reads
+        .replace(ReadSlot::Status(0), std::future::pending());
+    assert!(runtime.idle_wake() >= REFRESH_INTERVAL);
+    runtime.reads.cancel(&ReadSlot::Status(0));
+    runtime.refreshed = Instant::now();
+    assert!(runtime.idle_wake() > Duration::from_secs(4));
 }
 
 #[tokio::test]
@@ -267,8 +274,8 @@ async fn moving_the_selection_keeps_prefetches_that_are_still_wanted() -> Result
     let wanted: Vec<RepoPath> = PREFETCH_OFFSETS
         .iter()
         .filter_map(|offset| view.selected.checked_add_signed(*offset))
-        .filter_map(|row| view.visible.get(row))
-        .map(|&node| view.tree.nodes[node].path(&[]).clone())
+        .filter_map(|row| view.file_at(row))
+        .map(|file| file.path.clone())
         .collect();
     assert_eq!(wanted.len(), 3);
     runtime.reads.retain(|slot| match slot {
@@ -281,9 +288,14 @@ async fn moving_the_selection_keeps_prefetches_that_are_still_wanted() -> Result
             .contains(&ReadSlot::Prefetch(path("file_02.rs")?, DiffSide::Worktree))
     );
     assert!(
-        !runtime
+        runtime
             .reads
             .contains(&ReadSlot::Prefetch(path("file_00.rs")?, DiffSide::Worktree))
+    );
+    assert!(
+        !runtime
+            .reads
+            .contains(&ReadSlot::Prefetch(path("file_01.rs")?, DiffSide::Worktree))
     );
     assert_eq!(runtime.reads.len(), 2);
     Ok(())

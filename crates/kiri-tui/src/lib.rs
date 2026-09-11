@@ -90,7 +90,7 @@ pub async fn run(path: PathBuf, store: Store, side: DiffSide, color: ColorMode) 
         let wake = if animating {
             Duration::from_millis(16)
         } else {
-            runtime.next_refresh()
+            runtime.idle_wake()
         };
         let event = tokio::select! {
             _ = runtime.wait() => continue,

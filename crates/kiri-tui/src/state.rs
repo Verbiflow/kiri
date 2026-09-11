@@ -255,10 +255,16 @@ impl WorkspaceView {
     }
 
     pub fn file(&self) -> Option<&FileChange> {
+        self.file_at(self.selected)
+    }
+
+    /// The changed file shown on a visible row, or `None` for folders and rows out of range.
+    pub fn file_at(&self, row: usize) -> Option<&FileChange> {
         let Load::Ready(status) = &self.status else {
             return None;
         };
-        match &self.node()?.entry {
+        let node = self.tree.nodes.get(*self.visible.get(row)?)?;
+        match &node.entry {
             Entry::File { index } => status.files.get(*index),
             Entry::Folder { .. } => None,
         }

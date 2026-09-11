@@ -150,12 +150,18 @@ impl Runtime {
             && !self.reads.contains(&ReadSlot::Status(self.app.active))
     }
 
-    /// Time until the next automatic refresh. The idle loop sleeps this long instead of
-    /// polling, so a quiet Kiri wakes for input, messages, or the refresh only.
-    pub fn next_refresh(&self) -> Duration {
+    /// How long the idle loop may sleep. Input, messages, and animations wake it earlier; when
+    /// a refresh cannot start because a modal is open or a scan is in flight, the loop waits a
+    /// full interval rather than spinning until that condition clears.
+    pub fn idle_wake(&self) -> Duration {
+        if !matches!(self.app.modal, Modal::None)
+            || self.reads.contains(&ReadSlot::Status(self.app.active))
+        {
+            return REFRESH_INTERVAL;
+        }
         REFRESH_INTERVAL
-            .checked_sub(self.refreshed.elapsed())
-            .unwrap_or(Duration::from_millis(1))
+            .saturating_sub(self.refreshed.elapsed())
+            .max(Duration::from_millis(1))
     }
 
     pub fn refresh(&mut self) {
@@ -210,19 +216,16 @@ impl Runtime {
             return;
         }
         let view = &self.app.workspaces[workspace];
-        let (Some(repo), Load::Ready(status)) = (view.repo.clone(), &view.status) else {
+        let Some(repo) = view.repo.clone() else {
             return;
         };
         let side = view.side;
         let files: Vec<FileChange> = PREFETCH_OFFSETS
             .iter()
             .filter_map(|offset| view.selected.checked_add_signed(*offset))
-            .filter_map(|row| view.visible.get(row))
-            .filter_map(|&node| match view.tree.nodes[node].entry {
-                kiri_core::tree::Entry::File { index } => status.files.get(index).cloned(),
-                kiri_core::tree::Entry::Folder { .. } => None,
-            })
+            .filter_map(|row| view.file_at(row))
             .filter(|file| !view.expanded.contains(&file.path))
+            .cloned()
             .collect();
         self.reads.retain(|slot| match slot {
             ReadSlot::Prefetch(path, prefetched) => {
@@ -242,7 +245,7 @@ impl Runtime {
         }
     }
 
-    pub fn load_diff(&mut self, reset: bool, large: bool, _force: bool) {
+    pub fn load_diff(&mut self, reset: bool, large: bool) {
         self.highlight_task = None;
         self.reads.cancel(&ReadSlot::Preview);
         self.diff_request += 1;
@@ -298,13 +301,13 @@ impl Runtime {
                     "Colors disabled. Press t to enable."
                 }
                 .into();
-                self.load_diff(false, false, true);
+                self.load_diff(false, false);
             }
             Action::Refresh => {
                 self.app.notice = "Refreshing repository…".into();
                 self.refresh();
             }
-            Action::LoadDiff { reset, large } => self.load_diff(reset, large, large),
+            Action::LoadDiff { reset, large } => self.load_diff(reset, large),
             Action::Switch(index) => {
                 if index == self.app.active {
                     return;
@@ -312,7 +315,7 @@ impl Runtime {
                 self.reads.cancel(&ReadSlot::Status(self.app.active));
                 self.app.active = index;
                 self.app.filtering = false;
-                self.load_diff(false, false, false);
+                self.load_diff(false, false);
                 self.refresh();
             }
             Action::Cancel => {
@@ -635,7 +638,7 @@ impl Runtime {
                             if workspace == self.app.active
                                 && (!self.reads.contains(&ReadSlot::Preview) || selection_changed)
                             {
-                                self.load_diff(selection_changed, false, true);
+                                self.load_diff(selection_changed, false);
                             }
                         }
                         Err(error) => {
