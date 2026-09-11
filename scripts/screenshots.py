@@ -37,7 +37,11 @@ SHOTS = [
     ("review", (150, 38), []),
     ("folder", (120, 34), [(b"k", "working files in this folder")]),
     ("providers", (120, 34), [(b"P", "AI providers")]),
-    ("commit", (120, 34), [(b"s", "Staged"), (b"c", "Review commit")]),
+    ("commit", (120, 34), [
+        (b"s", "Staged"),
+        (b"c", "Review commit"),
+        (b"test: cover case-insensitive and blank search queries\r\rBlank queries used to match every path. Lock in the new behaviour and\rcheck that matching ignores case.", "ignores case"),
+    ]),
 ]
 
 
