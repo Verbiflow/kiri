@@ -4,7 +4,7 @@ Kiri is a Rust Git client with a Ratatui interface and non-interactive CLI.
 
 ## Structure
 
-- `crates/kiri-core`: Git subprocess boundary, byte-safe paths, patches, folder trees, index operations and workspace storage. Syntax grammars are behind the opt-in `syntax` feature; wire schema derives use `schema`.
+- `crates/kiri-core`: Git subprocess boundary for every mutation and most reads, plus an in-process gitoxide reader (`native.rs`) for discovery and status. Byte-safe paths, patches, folder trees, index operations and workspace storage. Syntax grammars are behind the opt-in `syntax` feature; wire schema derives use `schema`.
 - `crates/kiri-analysis`: provider-neutral evidence capture, parallel analysis, hybrid source inspection, reviewed drafts and commit plans. Model and cache implementations are injected. No Rig, credentials, TUI or global settings.
 - `crates/kiri-ai`: standalone Kiri provider settings, authentication and Rig transports. Thin workflow adapters construct an analysis runtime; they do not implement chunking or reduction.
 - `crates/kiri-service`: shared repository reads, preview cache, admission-ordered writes, read-task cancellation and the `kiri-engine` sidecar. It has no TUI or provider SDK dependency.
@@ -31,7 +31,9 @@ Kiri is a Rust Git client with a Ratatui interface and non-interactive CLI.
 
 - TUI repository mutations, including hunk staging, sync, branch switching and applying a commit series, go through RepositoryService. Manual draft capture joins that admission queue too. UI selection generations and presentation caches remain client-local; do not bypass the queue through repository() for writes.
 - No repository-wide patch or numstat on startup. Status first, selected-file diff second. All reads are bounded and cancellable.
-- Startup overlaps Git calls instead of chaining them: the tracked status starts from the unverified path while `rev-parse` and the monitor configuration run, and the untracked scan starts as soon as the root is known (`Service::open_with_inventory`). Porcelain paths are root-relative, so the pre-open status needs no root.
+- Status is computed in-process by gitoxide when the repository state is one the mapping reproduces byte for byte; `Native::status` returns `None` for conflicts, submodules, sparse checkouts, assume-unchanged and intent-to-add entries, and Git answers instead. Rename detection always comes from Git (`status.renames=true` re-run). `KIRI_STATUS_BACKEND=git` disables the reader. `crates/kiri-core/tests/native.rs` is the differential suite: every supported state must equal `git status --porcelain=v2`, and every declined state must still be served by Git. Extend it before widening the native mapping.
+- Mutations, patches, blob reads and history stay on the Git subprocess. Private-object captures never use the native reader.
+- Startup spawns nothing before the first inventory when gitoxide can open the repository. When Git must answer, the tracked status and the untracked scan run concurrently (`Service::open_with_inventory`).
 - Reads are content-addressed. Status carries HEAD and index blob IDs per file; a status that is byte-equal to the cached one keeps its revision. Preview cache keys include those IDs plus one `lstat` stamp of the working file, so unchanged files never re-run Git across refreshes and edited files never serve stale text. Only mutations bump the revision unconditionally.
 - The TUI keeps built patch views by fingerprint and reuses their colors on refresh and revisit. After the selected patch is visible it prefetches the next two rows and the previous row into the shared cache; prefetch never runs during a job and is replaced on every selection.
 - The idle loop sleeps until input, a message, or the next refresh. Only animations and busy spinners wake it every 16 ms.
