@@ -59,6 +59,8 @@ fn bulk_stage_respects_the_filter_and_requires_confirmation() -> Result<()> {
                 staged: None,
                 worktree: Some(ChangeKind::Modified),
                 submodule: false,
+                head_oid: None,
+                index_oid: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -125,6 +127,8 @@ fn folder_navigation_and_space_include_collapsed_descendants() -> Result<()> {
                 staged: None,
                 worktree: Some(ChangeKind::Modified),
                 submodule: false,
+                head_oid: None,
+                index_oid: None,
             })
         })
         .collect::<Result<_>>()?;
@@ -176,6 +180,8 @@ fn folder_checkbox_and_inspector_are_mouse_actions() -> Result<()> {
             staged: None,
             worktree: Some(ChangeKind::Modified),
             submodule: false,
+            head_oid: None,
+            index_oid: None,
         }],
         ..RepoStatus::default()
     });
@@ -220,6 +226,8 @@ fn staged_selection_drafts_only_its_paths_and_all_is_explicit() -> Result<()> {
                 staged: Some(ChangeKind::Modified),
                 worktree: None,
                 submodule: false,
+                head_oid: None,
+                index_oid: None,
             })
         })
         .collect::<Result<_>>()?;

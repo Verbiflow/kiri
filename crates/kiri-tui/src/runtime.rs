@@ -14,7 +14,7 @@ use kiri_ai::{
 };
 use kiri_core::sync::{Branch, HistoryEntry, SyncAction};
 use kiri_core::{
-    model::{DiffSide, RepoPath, RepoStatus},
+    model::{DiffSide, FileChange, RepoPath, RepoStatus},
     storage::Store,
     workspace::{Workspace, Workspaces},
 };
@@ -93,7 +93,13 @@ pub enum JobResult {
 enum ReadSlot {
     Status(usize),
     Preview,
+    Prefetch(RepoPath, DiffSide),
 }
+
+/// Rows around the selection whose patches are read ahead once the selected patch is visible.
+/// Sequential review then finds the next file already cached instead of waiting for Git.
+const PREFETCH_OFFSETS: [isize; 3] = [1, 2, -1];
+const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct Runtime {
     pub app: App,
@@ -140,8 +146,16 @@ impl Runtime {
     }
 
     pub fn refresh_due(&self) -> bool {
-        self.refreshed.elapsed() >= Duration::from_secs(5)
+        self.refreshed.elapsed() >= REFRESH_INTERVAL
             && !self.reads.contains(&ReadSlot::Status(self.app.active))
+    }
+
+    /// Time until the next automatic refresh. The idle loop sleeps this long instead of
+    /// polling, so a quiet Kiri wakes for input, messages, or the refresh only.
+    pub fn next_refresh(&self) -> Duration {
+        REFRESH_INTERVAL
+            .checked_sub(self.refreshed.elapsed())
+            .unwrap_or(Duration::from_millis(1))
     }
 
     pub fn refresh(&mut self) {
@@ -157,21 +171,23 @@ impl Runtime {
         let tx = self.tx.clone();
         self.reads.replace(ReadSlot::Status(index), async move {
             let result = async {
-                let entry = if let Some(entry) = existing {
-                    entry
-                } else {
-                    service.open(path).await?
+                let partial_tx = tx.clone();
+                let partial = move |entry: &Arc<kiri_service::RepositoryService>, status| {
+                    let _ = partial_tx.send(Message::Status {
+                        workspace: index,
+                        revision,
+                        scan: FileScan::Pending,
+                        result: Ok((entry.clone(), status)),
+                    });
                 };
-                let status = entry
-                    .inventory(true, |status| {
-                        let _ = tx.send(Message::Status {
-                            workspace: index,
-                            revision,
-                            scan: FileScan::Pending,
-                            result: Ok((entry.clone(), status)),
-                        });
-                    })
-                    .await?;
+                let (entry, status) = if let Some(entry) = existing {
+                    let status = entry
+                        .inventory(true, |status| partial(&entry, status))
+                        .await?;
+                    (entry, status)
+                } else {
+                    service.open_with_inventory(path, partial).await?
+                };
                 Ok((entry, (*status.status).clone()))
             }
             .await;
@@ -184,7 +200,49 @@ impl Runtime {
         });
     }
 
-    pub fn load_diff(&mut self, reset: bool, large: bool, force: bool) {
+    /// Read the patches of neighbouring rows into the shared cache. Runs only after the selected
+    /// patch is visible and never while a job holds the screen. Reads that are still wanted after
+    /// a selection change keep running; only reads for rows that left the window are cancelled.
+    fn prefetch(&mut self, workspace: usize) {
+        if self.app.busy() || workspace != self.app.active {
+            self.reads
+                .retain(|slot| !matches!(slot, ReadSlot::Prefetch(..)));
+            return;
+        }
+        let view = &self.app.workspaces[workspace];
+        let (Some(repo), Load::Ready(status)) = (view.repo.clone(), &view.status) else {
+            return;
+        };
+        let side = view.side;
+        let files: Vec<FileChange> = PREFETCH_OFFSETS
+            .iter()
+            .filter_map(|offset| view.selected.checked_add_signed(*offset))
+            .filter_map(|row| view.visible.get(row))
+            .filter_map(|&node| match view.tree.nodes[node].entry {
+                kiri_core::tree::Entry::File { index } => status.files.get(index).cloned(),
+                kiri_core::tree::Entry::Folder { .. } => None,
+            })
+            .filter(|file| !view.expanded.contains(&file.path))
+            .collect();
+        self.reads.retain(|slot| match slot {
+            ReadSlot::Prefetch(path, prefetched) => {
+                *prefetched == side && files.iter().any(|file| file.path == *path)
+            }
+            _ => true,
+        });
+        for file in files {
+            let slot = ReadSlot::Prefetch(file.path.clone(), side);
+            if self.reads.contains(&slot) {
+                continue;
+            }
+            let repo = repo.clone();
+            self.reads.replace(slot, async move {
+                let _ = repo.preview(&file, side, false).await;
+            });
+        }
+    }
+
+    pub fn load_diff(&mut self, reset: bool, large: bool, _force: bool) {
         self.highlight_task = None;
         self.reads.cancel(&ReadSlot::Preview);
         self.diff_request += 1;
@@ -203,17 +261,6 @@ impl Runtime {
         let side = workspace.side;
         if large {
             workspace.expanded.insert(file.path.clone());
-        }
-        if !force
-            && !large
-            && let Some((_, _, view)) = workspace
-                .cache
-                .iter()
-                .find(|(path, s, _)| *path == file.path && *s == side)
-        {
-            let cached = view.clone();
-            self.show_diff(index, file.path, side, cached, reset);
-            return;
         }
         let Some(repo) = workspace.repo.clone() else {
             return;
@@ -618,7 +665,10 @@ impl Runtime {
                         continue;
                     }
                     match result {
-                        Ok(diff) => self.show_diff(workspace, path, side, diff, false),
+                        Ok(diff) => {
+                            self.show_diff(workspace, path, side, diff, false);
+                            self.prefetch(workspace);
+                        }
                         Err(error) => view.diff = Load::Failed(error.to_string()),
                     }
                 }
@@ -637,7 +687,7 @@ impl Runtime {
                     if current.side != side || current.file().is_none_or(|file| file.path != path) {
                         continue;
                     }
-                    current.remember_diff(path, side, view.clone());
+                    current.remember_diff(view.clone());
                     current.diff = Load::Ready(view);
                 }
                 Message::Progress { request, text } => {

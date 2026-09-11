@@ -25,13 +25,24 @@ impl Runtime {
         reset: bool,
     ) {
         let previous = &self.app.workspaces[workspace];
-        if previous.displayed_path.as_ref() == Some(&(path.clone(), side))
-            && let Load::Ready(existing) = &previous.diff
-            && existing.document.fingerprint == diff.document.fingerprint
-            && matches!(existing.syntax, SyntaxState::Ready { .. })
+        let colored = match &previous.diff {
+            Load::Ready(existing)
+                if previous.displayed_path.as_ref() == Some(&(path.clone(), side))
+                    && existing.document.fingerprint == diff.document.fingerprint
+                    && matches!(existing.syntax, SyntaxState::Ready { .. }) =>
+            {
+                Some(existing.syntax.clone())
+            }
+            _ => previous
+                .cached_diff(&diff.document.fingerprint)
+                .filter(|cached| matches!(cached.syntax, SyntaxState::Ready { .. }))
+                .map(|cached| cached.syntax.clone()),
+        };
+        if let Some(syntax) = colored
+            && !matches!(diff.syntax, SyntaxState::Ready { .. })
         {
             let mut reused = (*diff).clone();
-            reused.syntax = existing.syntax.clone();
+            reused.syntax = syntax;
             diff = Arc::new(reused);
         }
         let language = Language::for_path(&path).filter(|_| {
@@ -50,7 +61,7 @@ impl Runtime {
                 .unwrap_or(0);
         }
         view.displayed_path = Some((path.clone(), side));
-        view.remember_diff(path.clone(), side, diff.clone());
+        view.remember_diff(diff.clone());
         if let Some(language) = language {
             let mut pending = (*diff).clone();
             pending.syntax = SyntaxState::Loading(language);

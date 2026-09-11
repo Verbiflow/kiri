@@ -30,6 +30,8 @@ fn app() -> Result<App> {
                 staged: None,
                 worktree: Some(ChangeKind::Modified),
                 submodule: false,
+                head_oid: None,
+                index_oid: None,
             })
         })
         .collect::<Result<_>>()?;
@@ -144,6 +146,8 @@ fn syntax_colors_are_visible_without_losing_diff_backgrounds() -> Result<()> {
             staged: None,
             worktree: Some(ChangeKind::Modified),
             submodule: false,
+            head_oid: None,
+            index_oid: None,
         }],
         ..RepoStatus::default()
     });

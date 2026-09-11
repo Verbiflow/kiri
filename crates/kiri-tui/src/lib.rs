@@ -86,9 +86,15 @@ pub async fn run(path: PathBuf, store: Store, side: DiffSide, color: ColorMode) 
             terminal.draw(|frame| view::draw(frame, &runtime.app))?;
             runtime.app.dirty = false;
         }
+        let animating = runtime.app.completion.is_some() || runtime.app.busy();
+        let wake = if animating {
+            Duration::from_millis(16)
+        } else {
+            runtime.next_refresh()
+        };
         let event = tokio::select! {
             _ = runtime.wait() => continue,
-            _ = tokio::time::sleep(Duration::from_millis(16)) => continue,
+            _ = tokio::time::sleep(wake) => continue,
             event = events.next() => event.context("Terminal input closed")??,
         };
         let size = terminal.size()?;

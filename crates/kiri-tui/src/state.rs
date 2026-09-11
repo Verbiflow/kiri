@@ -161,7 +161,12 @@ pub struct WorkspaceView {
     pub scroll: usize,
     pub horizontal: usize,
     pub hunk: usize,
-    pub cache: VecDeque<(RepoPath, DiffSide, Arc<DiffView>)>,
+    /// Recently built views addressed by patch fingerprint, so an unchanged patch keeps its
+    /// syntax colors across refreshes and revisits without rebuilding or re-tokenizing.
+    cache: VecDeque<Arc<DiffView>>,
+    /// Lowercased display paths aligned with `status.files`, computed once per inventory so the
+    /// filter never allocates per keystroke.
+    lower: Vec<String>,
     pub saved_draft: Option<CommitDraft>,
     pub saved_plan: Option<CommitPlan>,
     pub pending_review: Option<TreeSelection>,
@@ -193,6 +198,7 @@ impl WorkspaceView {
             horizontal: 0,
             hunk: 0,
             cache: VecDeque::new(),
+            lower: Vec::new(),
             saved_draft: None,
             saved_plan: None,
             pending_review: None,
@@ -318,10 +324,13 @@ impl WorkspaceView {
                 .files
                 .iter()
                 .enumerate()
-                .filter(|(_, f)| {
+                .filter(|(i, f)| {
                     f.kind(self.side).is_some()
                         && (filter.is_empty()
-                            || fuzzy_match(&filter, &f.path.display().to_lowercase()))
+                            || self
+                                .lower
+                                .get(*i)
+                                .is_some_and(|text| fuzzy_match(&filter, text)))
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -360,6 +369,11 @@ impl WorkspaceView {
                     s + usize::from(file.staged.is_some()),
                 )
             });
+        self.lower = status
+            .files
+            .iter()
+            .map(|file| file.path.display().to_lowercase())
+            .collect();
         self.status = Load::Ready(status);
         self.rebuild_files();
         if let (Some((path, folder)), Load::Ready(status)) = (selected, &self.status)
@@ -370,16 +384,23 @@ impl WorkspaceView {
         {
             self.selected = index;
         }
-        self.cache.clear();
         self.review_staged();
     }
 
-    pub fn remember_diff(&mut self, path: RepoPath, side: DiffSide, view: Arc<DiffView>) {
-        self.cache.retain(|(p, s, _)| p != &path || *s != side);
-        self.cache.push_front((path, side, view));
-        while self.cache.len() > 8 {
+    pub fn remember_diff(&mut self, view: Arc<DiffView>) {
+        let fingerprint = view.document.fingerprint.clone();
+        self.cache
+            .retain(|cached| cached.document.fingerprint != fingerprint);
+        self.cache.push_front(view);
+        while self.cache.len() > 16 {
             self.cache.pop_back();
         }
+    }
+
+    pub fn cached_diff(&self, fingerprint: &str) -> Option<&Arc<DiffView>> {
+        self.cache
+            .iter()
+            .find(|cached| cached.document.fingerprint == fingerprint)
     }
 }
 
