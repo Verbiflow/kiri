@@ -139,3 +139,33 @@ test('cancel propagates into an in-flight host model without writing Git', async
     assert.throws(() => execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: root, env: environment, stdio: 'pipe' }));
   } finally { client?.dispose(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('status polling reports unchanged revisions without resending the inventory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiri-sdk-revision-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, env: environment, encoding: 'utf8' });
+  let client;
+  try {
+    git('init', '-q'); await writeFile(join(root, 'a.txt'), 'one\n'); git('add', '.'); git('commit', '-qm', 'Initial');
+    await writeFile(join(root, 'a.txt'), 'two\n');
+    client = await KiriClient.connect({ binary, env: environment });
+    const repo = await client.open(root);
+    const first = await repo.status(true);
+    assert.equal(first.status.files.length, 1);
+    assert.equal(typeof first.status.files[0].index_oid, 'string');
+    const unchanged = await repo.statusSince(first.revision);
+    assert.equal(unchanged.kind, 'unchanged');
+    assert.equal(unchanged.revision, first.revision);
+    await writeFile(join(root, 'b.txt'), 'new\n');
+    const changed = await repo.statusSince(first.revision);
+    assert.equal(changed.kind, 'status');
+    assert.ok(changed.revision > first.revision);
+    assert.equal(changed.status.files.length, 2);
+    const preview = await repo.preview([...Buffer.from('a.txt')], 'worktree');
+    assert.ok(Buffer.from(preview.patch).toString().includes('+two'));
+    await writeFile(join(root, 'a.txt'), 'three\n');
+    await repo.status(true);
+    const edited = await repo.preview([...Buffer.from('a.txt')], 'worktree');
+    assert.ok(Buffer.from(edited.patch).toString().includes('+three'));
+    await repo.close();
+  } finally { client?.dispose(); await rm(root, { recursive: true, force: true }); }
+});

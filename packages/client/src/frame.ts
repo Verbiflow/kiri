@@ -60,6 +60,11 @@ export type ResultValue =
       [k: string]: unknown;
     }
   | {
+      kind: 'unchanged';
+      revision: number;
+      [k: string]: unknown;
+    }
+  | {
       binary: boolean;
       kind: 'preview';
       notice?: string | null;
@@ -240,6 +245,14 @@ export interface RepoStatus {
   [k: string]: unknown;
 }
 export interface FileChange {
+  /**
+   * Blob recorded in HEAD for this path, when Git reported one.
+   */
+  head_oid?: string | null;
+  /**
+   * Blob recorded in the index for this path, when Git reported one.
+   */
+  index_oid?: string | null;
   original_path?: RepoPath | null;
   path: RepoPath;
   staged?: ChangeKind | null;

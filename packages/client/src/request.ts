@@ -16,6 +16,11 @@ export type Command =
       fresh: boolean;
       method: 'status';
       repo: number;
+      /**
+       * Revision the caller already holds. When the repository still reports that revision,
+       * the reply is `unchanged` instead of the full inventory.
+       */
+      since?: number | null;
     }
   | {
       large: boolean;

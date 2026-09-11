@@ -160,6 +160,12 @@ export class KiriRepository {
     if (reply.kind !== 'status') throw new KiriError('protocol', 'Expected status');
     return reply;
   }
+  /** Poll cheaply: when the engine still reports `since`, the reply carries no file list. */
+  async statusSince(since: number, fresh = true) {
+    const reply = await this.client.request({ method: 'status', repo: this.id, fresh, since });
+    if (reply.kind !== 'status' && reply.kind !== 'unchanged') throw new KiriError('protocol', 'Expected status');
+    return reply;
+  }
   async preview(path: number[], side: 'worktree' | 'staged', signal?: AbortSignal) {
     const reply = await this.client.request({ method: 'preview', repo: this.id, path, side, large: false }, signal);
     if (reply.kind !== 'preview') throw new KiriError('protocol', 'Expected preview');
