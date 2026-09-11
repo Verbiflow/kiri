@@ -369,6 +369,32 @@ impl Repository {
         }
         let _lock = crate::storage::FileLock::acquire(self.git_path("kiri-operation.lock").await?)?;
         let (tracked, untracked) = self.staging_paths(paths).await?;
+        // A selection that matches nothing in the inventory is either stale
+        // ignored content, which stays untouched, or a path that no longer
+        // exists anywhere, which is a failed write the caller must hear about.
+        // Decide before the first `add` so a mixed selection changes nothing.
+        let unmatched: Vec<RepoPath> = paths
+            .iter()
+            .filter(|selected| {
+                !tracked
+                    .iter()
+                    .chain(untracked.iter())
+                    .any(|found| covers(selected, found))
+            })
+            .cloned()
+            .collect();
+        if !unmatched.is_empty() {
+            let ignored = self.ignored_paths(&unmatched).await?;
+            if let Some(missing) = unmatched
+                .iter()
+                .find(|selected| !ignored.iter().any(|found| covers(selected, found)))
+            {
+                bail!(
+                    "Git: pathspec '{}' did not match any files",
+                    String::from_utf8_lossy(missing.bytes())
+                );
+            }
+        }
         for (paths, update) in [(tracked, true), (untracked, false)] {
             if paths.is_empty() {
                 continue;
@@ -389,20 +415,40 @@ impl Repository {
         Ok(())
     }
 
+    /// Ignored untracked files under the selected paths: content `stage` must never add.
+    async fn ignored_paths(&self, paths: &[RepoPath]) -> Result<Vec<RepoPath>> {
+        let mut ignored = Vec::new();
+        for batch in path_batches(paths)? {
+            let mut command = self.command();
+            command.args([
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "-z",
+                "--",
+            ]);
+            for path in batch {
+                command.arg(path.to_path_buf());
+            }
+            let output = checked(
+                self.execute(command, None, 16 * 1024 * 1024, Duration::from_secs(15))
+                    .await?,
+            )?;
+            for record in output
+                .split(|byte| *byte == 0)
+                .filter(|record| !record.is_empty())
+            {
+                ignored.push(RepoPath::new(record.to_vec())?);
+            }
+        }
+        Ok(ignored)
+    }
+
     async fn staging_paths(&self, paths: &[RepoPath]) -> Result<(Vec<RepoPath>, Vec<RepoPath>)> {
         let mut tracked = std::collections::HashSet::new();
         let mut untracked = std::collections::HashSet::new();
-        let mut start = 0;
-        while start < paths.len() {
-            let mut end = start;
-            let mut bytes = 0;
-            while end < paths.len() && bytes + paths[end].bytes().len() < 48 * 1024 {
-                bytes += paths[end].bytes().len() + 1;
-                end += 1;
-            }
-            if end == start {
-                bail!("Selected path exceeds the staging argument budget");
-            }
+        for batch in path_batches(paths)? {
             let mut command = self.command();
             command.args([
                 "ls-files",
@@ -413,7 +459,7 @@ impl Repository {
                 "-z",
                 "--",
             ]);
-            for path in &paths[start..end] {
+            for path in batch {
                 command.arg(path.to_path_buf());
             }
             let output = checked(
@@ -438,7 +484,6 @@ impl Repository {
                     _ => bail!("Unexpected staging inventory kind"),
                 }
             }
-            start = end;
         }
         untracked.retain(|path| !tracked.contains(path));
         Ok((
@@ -526,6 +571,39 @@ impl Repository {
 
 pub(crate) fn builtin_fsmonitor_setting(code: Option<i32>, stdout: &[u8]) -> bool {
     code == Some(0) && stdout.trim_ascii() == b"true"
+}
+
+/// Argument batches under Git's command-line budget; every batch holds at least one path.
+fn path_batches(paths: &[RepoPath]) -> Result<Vec<&[RepoPath]>> {
+    let mut batches = Vec::new();
+    let mut start = 0;
+    while start < paths.len() {
+        let mut end = start;
+        let mut bytes = 0;
+        while end < paths.len() && bytes + paths[end].bytes().len() < 48 * 1024 {
+            bytes += paths[end].bytes().len() + 1;
+            end += 1;
+        }
+        if end == start {
+            bail!("Selected path exceeds the staging argument budget");
+        }
+        batches.push(&paths[start..end]);
+        start = end;
+    }
+    Ok(batches)
+}
+
+/// Whether a selected path names `found` itself or a folder containing it.
+fn covers(selected: &RepoPath, found: &RepoPath) -> bool {
+    let prefix = selected
+        .bytes()
+        .strip_suffix(b"/")
+        .unwrap_or(selected.bytes());
+    let candidate = found.bytes();
+    candidate == prefix
+        || (candidate.len() > prefix.len()
+            && candidate.starts_with(prefix)
+            && candidate[prefix.len()] == b'/')
 }
 
 pub(crate) fn pathspec_input(paths: &[RepoPath]) -> Vec<u8> {

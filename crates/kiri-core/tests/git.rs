@@ -399,3 +399,45 @@ async fn filenames_need_not_be_utf8() -> Result<()> {
     assert!(repo.status().await?.files[0].staged.is_some());
     Ok(())
 }
+
+#[tokio::test]
+async fn staging_a_missing_path_fails_before_any_write() -> Result<()> {
+    let temp = fixture()?;
+    fs::write(temp.path().join(".git/info/exclude"), "*.tmp\n")?;
+    fs::write(temp.path().join("stale.tmp"), "ignored\n")?;
+    fs::write(temp.path().join("new.txt"), "new\n")?;
+    let repo = Repository::open(temp.path()).await?;
+    let index = fs::read(temp.path().join(".git/index"))?;
+    // Stale ignored content is skipped silently: nothing to add, nothing wrong.
+    repo.stage(&[RepoPath::new(b"stale.tmp".to_vec())?]).await?;
+    assert_eq!(fs::read(temp.path().join(".git/index"))?, index);
+    // A path that exists nowhere is a failed write, named in the error.
+    let missing = repo.stage(&[RepoPath::new(b"missing.txt".to_vec())?]).await;
+    let message = match missing {
+        Ok(()) => bail!("staging a missing path must fail"),
+        Err(error) => error.to_string(),
+    };
+    assert!(message.contains("missing.txt"), "{message}");
+    assert_eq!(fs::read(temp.path().join(".git/index"))?, index);
+    // A mixed selection fails as a whole, so the index is exactly as before.
+    let mixed = repo
+        .stage(&[
+            RepoPath::new(b"new.txt".to_vec())?,
+            RepoPath::new(b"missing.txt".to_vec())?,
+        ])
+        .await;
+    assert!(mixed.is_err());
+    assert_eq!(fs::read(temp.path().join(".git/index"))?, index);
+    // A folder selection is covered by the files under it, including ignored ones.
+    fs::create_dir_all(temp.path().join("only-ignored"))?;
+    fs::write(temp.path().join("only-ignored/build.tmp"), "ignored\n")?;
+    repo.stage(&[RepoPath::new(b"only-ignored".to_vec())?])
+        .await?;
+    assert_eq!(fs::read(temp.path().join(".git/index"))?, index);
+    repo.stage(&[RepoPath::new(b"new.txt".to_vec())?]).await?;
+    assert_eq!(
+        repo.git(&["diff", "--cached", "--name-only"]).await?,
+        b"new.txt\n"
+    );
+    Ok(())
+}
