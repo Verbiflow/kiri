@@ -95,7 +95,17 @@ Build the engine with `make install-engine` and validate the client package with
 
 ## Speed
 
-Kiri loads the file list first and computes a diff only for the file you select, so a repository with thousands of changed files opens in a few hundred milliseconds. GitUI is still faster on the same machine. Numbers and method are in [`benchmarks/local-baseline.json`](benchmarks/local-baseline.json); reproduce them with `scripts/benchmark_clients.py`.
+Warm medians on macOS ARM64, same disposable repository and selection for each client, GitUI 0.28.1 from Homebrew:
+
+| | Kiri | GitUI |
+| --- | ---: | ---: |
+| Launch to visible patch, 100 changed files | 30 ms | 17 ms |
+| Launch to visible patch, 5,000 changed files | 94 ms | 86 ms |
+| Next file after a keypress, 100 files | 2 ms | 2 ms |
+| Next file after a keypress, 5,000 files | 2 ms | 8 ms |
+| Git processes during 6 s idle | 1 | 0 |
+
+Status is computed in-process with gitoxide on a thread pool and is checked against `git status` output by a differential test suite; repository states the mapping does not reproduce exactly, such as conflicts and submodules, are computed by Git itself. Patches are cached by the blob IDs in that status plus one `lstat`, the next files are read ahead, and an unchanged repository never re-runs a diff. What remains on launch is the first `git diff`. Samples and method are in [`benchmarks/local-baseline.json`](benchmarks/local-baseline.json); reproduce with `scripts/benchmark_clients.py --kiri target/release/kiri --gitui $(which gitui)`.
 
 ## Development
 
