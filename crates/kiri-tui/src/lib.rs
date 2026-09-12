@@ -7,6 +7,7 @@ mod modals;
 mod motion;
 mod runtime;
 pub mod state;
+pub mod theme;
 pub mod view;
 
 use anyhow::{Context, Result};

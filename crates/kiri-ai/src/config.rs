@@ -153,6 +153,46 @@ pub fn validate_endpoint(endpoint: &str) -> Result<reqwest::Url> {
     Ok(url)
 }
 
+/// Presentation and interaction preferences for the TUI. Kept outside the sidecar protocol so
+/// changing them never alters the schema digest.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UiSettings {
+    /// Theme identifier, for example `catppuccin-mocha`. `None` keeps the built-in default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// Panel border style: `rounded`, `plain`, `double` or `thick`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub borders: Option<String>,
+    /// AI analyses estimated at this many model calls or fewer start immediately after a quick
+    /// action; larger ones open the cost review first. Zero always asks.
+    pub auto_approve_calls: usize,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            theme: None,
+            borders: None,
+            auto_approve_calls: 12,
+        }
+    }
+}
+
+impl UiSettings {
+    pub fn validate(&self) -> Result<()> {
+        for value in [&self.theme, &self.borders].into_iter().flatten() {
+            if value.is_empty() || value.len() > 64 || value.chars().any(char::is_control) {
+                bail!("Invalid UI setting in settings.json");
+            }
+        }
+        if self.auto_approve_calls > 4096 {
+            bail!("auto_approve_calls must be at most 4096");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Settings {
@@ -160,12 +200,15 @@ pub struct Settings {
     pub providers: BTreeMap<Provider, ProviderSettings>,
     #[serde(default)]
     pub analysis: crate::analysis::AnalysisOptions,
+    #[serde(default)]
+    pub ui: UiSettings,
 }
 
 impl Settings {
     pub fn load(store: &Store) -> Result<Self> {
         let settings: Self = store.load("settings.json")?;
         settings.analysis.validate()?;
+        settings.ui.validate()?;
         for (provider, config) in &settings.providers {
             config.validate(*provider)?;
         }
@@ -178,6 +221,14 @@ impl Settings {
             settings.providers.insert(provider, config);
             settings.active = Some(provider);
             Ok(())
+        })
+    }
+
+    /// Persist a presentation preference without touching provider settings.
+    pub fn update_ui(store: &Store, apply: impl FnOnce(&mut UiSettings)) -> Result<()> {
+        store.update::<Self, _>("settings.json", |settings| {
+            apply(&mut settings.ui);
+            settings.ui.validate()
         })
     }
 

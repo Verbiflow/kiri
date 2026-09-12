@@ -172,20 +172,18 @@ fn syntax_colors_are_visible_without_losing_diff_backgrounds() -> Result<()> {
         TokenKind::Number,
     ] {
         assert!(
-            cells.iter().any(|cell| cell.fg == token_color(kind)),
+            cells
+                .iter()
+                .any(|cell| cell.fg == token_color(kind, app.theme)),
             "missing {kind:?} color"
         );
     }
     assert!(
-        cells
-            .iter()
-            .any(|cell| cell.bg == view::ADD_BG && cell.fg == token_color(TokenKind::String))
+        cells.iter().any(|cell| cell.bg == app.theme.add_bg
+            && cell.fg == token_color(TokenKind::String, app.theme))
     );
-    assert!(
-        cells
-            .iter()
-            .any(|cell| cell.bg == view::REMOVE_BG && cell.fg == token_color(TokenKind::String))
-    );
+    assert!(cells.iter().any(|cell| cell.bg == app.theme.remove_bg
+        && cell.fg == token_color(TokenKind::String, app.theme)));
     Ok(())
 }
 

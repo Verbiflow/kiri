@@ -1,7 +1,4 @@
-use crate::{
-    state::DiffView,
-    view::{MUTED, TEXT},
-};
+use crate::{state::DiffView, theme::Theme};
 use anyhow::{Result, bail};
 use kiri_core::{
     diff::LineKind,
@@ -142,20 +139,20 @@ pub fn highlight_patch(
     Ok(result)
 }
 
-pub fn token_color(kind: TokenKind) -> Color {
+pub fn token_color(kind: TokenKind, theme: &Theme) -> Color {
     match kind {
-        TokenKind::Comment => MUTED,
-        TokenKind::Keyword => Color::Rgb(194, 152, 255),
-        TokenKind::String => Color::Rgb(156, 219, 150),
-        TokenKind::Number | TokenKind::Constant => Color::Rgb(247, 174, 122),
-        TokenKind::Function => Color::Rgb(123, 185, 255),
-        TokenKind::Type | TokenKind::Attribute => Color::Rgb(241, 207, 127),
-        TokenKind::Property => Color::Rgb(114, 205, 226),
-        TokenKind::Builtin | TokenKind::Tag => Color::Rgb(228, 166, 232),
-        TokenKind::Namespace => Color::Rgb(174, 170, 249),
-        TokenKind::Operator => Color::Rgb(137, 212, 216),
-        TokenKind::Punctuation => Color::Rgb(172, 187, 204),
-        TokenKind::Variable => TEXT,
+        TokenKind::Comment => theme.muted,
+        TokenKind::Keyword => theme.syntax.keyword,
+        TokenKind::String => theme.syntax.string,
+        TokenKind::Number | TokenKind::Constant => theme.syntax.number,
+        TokenKind::Function => theme.syntax.function,
+        TokenKind::Type | TokenKind::Attribute => theme.syntax.type_,
+        TokenKind::Property => theme.syntax.property,
+        TokenKind::Builtin | TokenKind::Tag => theme.syntax.builtin,
+        TokenKind::Namespace => theme.syntax.namespace,
+        TokenKind::Operator => theme.syntax.operator,
+        TokenKind::Punctuation => theme.syntax.punctuation,
+        TokenKind::Variable => theme.text,
     }
 }
 
@@ -164,6 +161,7 @@ pub fn spans(
     tokens: &[TokenSpan],
     offset: usize,
     width: usize,
+    theme: &Theme,
     default: Color,
     prefix: Color,
 ) -> Vec<Span<'static>> {
@@ -187,7 +185,7 @@ pub fn spans(
                 tokens
                     .get(token)
                     .filter(|span| span.bytes.contains(&byte))
-                    .map(|span| token_color(span.kind))
+                    .map(|span| token_color(span.kind, theme))
                     .unwrap_or(default)
             };
             if current != color && !segment.is_empty() {
@@ -247,7 +245,8 @@ mod tests {
             bytes: 1..7,
             kind: TokenKind::String,
         }];
-        let spans = spans("+你好 = 42", &tokens, 1, 4, TEXT, crate::view::ADD);
+        let theme = &crate::theme::KIRI;
+        let spans = spans("+你好 = 42", &tokens, 1, 4, theme, theme.text, theme.add);
         assert_eq!(
             spans.iter().map(|s| s.content.as_ref()).collect::<String>(),
             "你好"
@@ -255,7 +254,7 @@ mod tests {
         assert!(
             spans
                 .iter()
-                .all(|s| s.style.fg == Some(token_color(TokenKind::String)))
+                .all(|s| s.style.fg == Some(token_color(TokenKind::String, theme)))
         );
     }
 }
