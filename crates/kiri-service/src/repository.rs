@@ -411,6 +411,41 @@ impl RepositoryService {
             })
         }
     }
+    pub fn manual_draft_changes(
+        self: &Arc<Self>,
+        scope: kiri_core::review::CaptureScope,
+        paths: Option<Vec<RepoPath>>,
+    ) -> impl Future<Output = Result<CommitDraft>> + Send + 'static {
+        let repository = self.root().to_path_buf();
+        let owner = Arc::clone(self);
+        async move {
+            let mut snapshot = owner.capture_changes(scope).await?.snapshot;
+            if let (Some(paths), kiri_core::review::ReviewSnapshot::Worktree { snapshot }) =
+                (&paths, &mut snapshot)
+            {
+                let includes = |scope: &RepoPath, path: &RepoPath| {
+                    let prefix = scope.bytes().strip_suffix(b"/").unwrap_or(scope.bytes());
+                    path.bytes() == prefix
+                        || path
+                            .bytes()
+                            .strip_prefix(prefix)
+                            .is_some_and(|rest| rest.starts_with(b"/"))
+                };
+                snapshot
+                    .files
+                    .retain(|file| paths.iter().any(|path| includes(path, &file.path)));
+            }
+            snapshot.verify(owner.repository()).await?;
+            Ok(CommitDraft {
+                repository,
+                snapshot,
+                paths,
+                message: String::new(),
+                warnings: Vec::new(),
+                analysis: None,
+            })
+        }
+    }
     pub fn fence(self: &Arc<Self>) -> impl Future<Output = Result<()>> + Send + 'static {
         self.enqueue(Write::Fence)
     }

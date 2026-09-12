@@ -596,7 +596,7 @@ async fn staged_plan(temp: &TempDir) -> Result<CommitPlan> {
         .collect();
     Ok(CommitPlan {
         repository: repo.root().to_path_buf(),
-        snapshot: repo.staged_snapshot().await?,
+        snapshot: repo.staged_snapshot().await?.into(),
         files,
         groups,
         warnings: Vec::new(),

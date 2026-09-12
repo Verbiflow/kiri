@@ -1,10 +1,48 @@
 use anyhow::Result;
 use kiri_core::{
     model::{DiffSide, RepoPath},
+    review::CaptureScope,
     workbench::{Comparison, Preview},
 };
 use kiri_service::Service;
 use std::{fs, process::Command, sync::Arc};
+
+#[tokio::test]
+async fn working_drafts_stage_and_commit_only_the_reviewed_paths() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    git(&temp, &["init", "-q"])?;
+    fs::write(temp.path().join("selected.txt"), "before\n")?;
+    fs::write(temp.path().join("other.txt"), "before\n")?;
+    git(&temp, &["add", "."])?;
+    git(&temp, &["commit", "-qm", "initial"])?;
+    fs::write(temp.path().join("selected.txt"), "after\n")?;
+    fs::write(temp.path().join("other.txt"), "still working\n")?;
+
+    let service = Service::default();
+    let entry = service.open(temp.path()).await?;
+    let selected = RepoPath::new(b"selected.txt".to_vec())?;
+    let mut draft = entry
+        .manual_draft_changes(CaptureScope::Worktree, Some(vec![selected]))
+        .await?;
+    assert_eq!(draft.snapshot.source(), "working-tree");
+    draft.message = "test: commit selected working file".into();
+    entry.commit(draft).await?;
+
+    assert_eq!(
+        entry
+            .repository()
+            .git(&["show", "HEAD:selected.txt"])
+            .await?,
+        b"after\n"
+    );
+    let status = String::from_utf8(entry.repository().git(&["status", "--porcelain"]).await?)?;
+    assert_eq!(status.trim(), "M other.txt");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("other.txt"))?,
+        "still working\n"
+    );
+    Ok(())
+}
 
 #[tokio::test]
 async fn repository_handles_share_reads_and_order_admitted_mutations() -> Result<()> {

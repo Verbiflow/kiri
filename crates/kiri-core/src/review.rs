@@ -70,9 +70,7 @@ impl ReviewSnapshot {
     pub fn staged(&self) -> Result<&StagedSnapshot> {
         match self {
             Self::Staged { snapshot } => Ok(snapshot),
-            Self::Worktree { .. } => {
-                bail!("Stage the selected changes before creating a multi-commit plan")
-            }
+            Self::Worktree { .. } => bail!("This operation requires a staged snapshot"),
         }
     }
     pub async fn verify(&self, repo: &Repository) -> Result<()> {
@@ -91,33 +89,58 @@ impl ReviewSnapshot {
             Self::Staged { snapshot } => repo.commit_selection(snapshot, message, paths).await,
             Self::Worktree { snapshot } => {
                 snapshot.verify(repo).await?;
-                let selected = paths.map(<[RepoPath]>::to_vec).unwrap_or_else(|| {
-                    snapshot
-                        .files
-                        .iter()
-                        .map(|file| file.path.clone())
-                        .collect()
-                });
-                let allowed: std::collections::HashSet<_> =
-                    snapshot.files.iter().map(|file| &file.path).collect();
-                ensure!(
-                    !selected.is_empty() && selected.iter().all(|path| allowed.contains(path)),
-                    "Commit selection is outside the reviewed capture"
-                );
-                repo.stage(&selected).await?;
-                let staged = repo.staged_snapshot().await?;
-                ensure!(
-                    staged.head == snapshot.head && staged.head_ref == snapshot.head_ref,
-                    "Branch changed while staging reviewed files"
-                );
-                let selected_paths: std::collections::HashSet<_> = selected.iter().collect();
-                let status = repo.status().await?;
-                ensure!(status.files.iter().all(|file| !selected_paths.contains(&file.path) || file.worktree.is_none()), "Staged files no longer match the reviewed working files; review the index before retrying");
-                snapshot.verify_files(repo).await?;
-                repo.commit_selection(&staged, message, Some(&selected))
+                snapshot
+                    .commit_paths(repo, message, paths, snapshot.head.as_deref())
                     .await
             }
         }
+    }
+}
+impl WorktreeSnapshot {
+    /// Stage exactly `paths` (all captured files when `None`) and commit them on top of
+    /// `expected_head`. The captured working files are re-verified immediately before the
+    /// commit so a later edit can never slip into a reviewed commit. Multi-commit plans call
+    /// this once per group with the previous group's commit as `expected_head`.
+    pub async fn commit_paths(
+        &self,
+        repo: &Repository,
+        message: &str,
+        paths: Option<&[RepoPath]>,
+        expected_head: Option<&str>,
+    ) -> Result<String> {
+        let selected = paths
+            .map(<[RepoPath]>::to_vec)
+            .unwrap_or_else(|| self.files.iter().map(|file| file.path.clone()).collect());
+        let allowed: std::collections::HashSet<_> =
+            self.files.iter().map(|file| &file.path).collect();
+        ensure!(
+            !selected.is_empty() && selected.iter().all(|path| allowed.contains(path)),
+            "Commit selection is outside the reviewed capture"
+        );
+        ensure!(
+            repo.head().await?.as_deref() == expected_head
+                && repo.head_ref().await? == self.head_ref,
+            "HEAD or branch changed since review"
+        );
+        self.verify_files(repo).await?;
+        repo.stage(&selected).await?;
+        let staged = repo.staged_snapshot().await?;
+        ensure!(
+            staged.head.as_deref() == expected_head && staged.head_ref == self.head_ref,
+            "Branch changed while staging reviewed files"
+        );
+        let selected_paths: std::collections::HashSet<_> = selected.iter().collect();
+        let status = repo.status().await?;
+        ensure!(
+            status
+                .files
+                .iter()
+                .all(|file| !selected_paths.contains(&file.path) || file.worktree.is_none()),
+            "Staged files no longer match the reviewed working files; review the index before retrying"
+        );
+        self.verify_files(repo).await?;
+        repo.commit_selection(&staged, message, Some(&selected))
+            .await
     }
 }
 
@@ -356,7 +379,7 @@ impl WorktreeSnapshot {
         );
         self.verify_files(repo).await
     }
-    async fn verify_files(&self, repo: &Repository) -> Result<()> {
+    pub async fn verify_files(&self, repo: &Repository) -> Result<()> {
         let cancellation = ReadCancellation::default();
         for expected in &self.files {
             let actual = if expected.mode == 0o160000 {

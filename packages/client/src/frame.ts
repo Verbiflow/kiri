@@ -298,7 +298,19 @@ export interface CommitPlan {
   files: PlanFile[];
   groups: CommitGroup[];
   repository: string;
-  snapshot: StagedSnapshot;
+  /**
+   * Staged plans commit from a frozen index; working-tree plans stage each group's captured
+   * files right before its commit, so nothing touches the index until the plan is applied.
+   */
+  snapshot:
+    | {
+        snapshot: StagedSnapshot;
+        source: 'staged';
+      }
+    | {
+        snapshot: WorktreeSnapshot;
+        source: 'worktree';
+      };
   warnings: string[];
 }
 export interface PlanFile {
