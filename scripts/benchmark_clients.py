@@ -103,6 +103,7 @@ def measure(name, binary, repo, output, number, presses, cadence, idle):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 160, 0, 0))
     screen = Screen(160, 42)
+    load_1m = os.getloadavg()[0]
     started = time.perf_counter()
     process = subprocess.Popen(commands[name], cwd=repo, env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
     os.close(slave)
@@ -150,7 +151,7 @@ def measure(name, binary, repo, output, number, presses, cadence, idle):
                     os.read(master, 65536)
                 except OSError:
                     break
-        return {"inventory_ms": inventory, "visible_patch_ms": patch, "timed_out": patch is None, "parent_rss_at_ready_kib": rss,
+        return {"inventory_ms": inventory, "visible_patch_ms": patch, "timed_out": patch is None, "parent_rss_at_ready_kib": rss, "load_1m_at_start": round(load_1m, 2),
                 "navigation_ms": nav, "navigation_median_ms": statistics.median(nav) if nav else None,
                 "startup_git_processes": startup_processes, "idle_git_processes": idle_processes, "idle_seconds": idle, "read_only_keys": "q"}
     finally:
@@ -162,6 +163,14 @@ def measure(name, binary, repo, output, number, presses, cadence, idle):
                 process.kill()
                 process.wait()
         os.close(master)
+
+
+def quartiles(values):
+    if not values:
+        return None
+    ordered = sorted(values)
+    at = lambda q: ordered[min(len(ordered) - 1, max(0, round(q * (len(ordered) - 1))))]
+    return {"n": len(ordered), "min": round(ordered[0], 2), "p25": round(at(0.25), 2), "median": round(statistics.median(ordered), 2), "p75": round(at(0.75), 2), "max": round(ordered[-1], 2)}
 
 
 def git_processes(trace):
@@ -204,8 +213,10 @@ def main():
                 assert git(repo, "diff", "--cached", "--name-only") == b""
                 print(json.dumps({"files": count, "client": name, "run": number, **record}), flush=True)
         scenario["warm_medians_ms"] = {name: {metric: statistics.median(values) if (values := [run[metric] for run in runs[1:] if run[metric] is not None]) else None for metric in ("inventory_ms", "visible_patch_ms", "navigation_median_ms")} for name, runs in scenario["runs"].items()}
+        scenario["warm_distribution_ms"] = {name: {metric: quartiles([run[metric] for run in runs[1:] if run[metric] is not None]) for metric in ("inventory_ms", "visible_patch_ms", "navigation_median_ms")} for name, runs in scenario["runs"].items()}
+        scenario["load_1m"] = quartiles([run["load_1m_at_start"] for runs in scenario["runs"].values() for run in runs])
         scenario["idle_git_processes"] = {name: [run["idle_git_processes"] for run in runs] for name, runs in scenario["runs"].items()}
-        print(json.dumps({"files": count, "warm_medians_ms": scenario["warm_medians_ms"], "idle_git_processes": scenario["idle_git_processes"]}), flush=True)
+        print(json.dumps({"files": count, "warm_distribution_ms": scenario["warm_distribution_ms"], "load_1m": scenario["load_1m"], "idle_git_processes": scenario["idle_git_processes"]}), flush=True)
         report["scenarios"].append(scenario)
         (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps({"report": str(output / "report.json")}, indent=2))

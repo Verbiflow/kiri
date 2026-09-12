@@ -1,11 +1,11 @@
 {
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
-  "measured": "2026-09-11 (in-process status)",
+  "measured": "2026-09-11 (in-process status, 21 runs per client per fixture)",
   "terminal": {
     "columns": 160,
     "rows": 42
   },
-  "methodology": "Same disposable repositories and selected patch; actual PTY screen markers. First process run excluded from warm medians; warm runs rotate client order. Navigation presses the client's move-down key every 100 ms for 12 presses and times the next visible patch. Idle Git processes are counted from Git Trace2 during 6 s of inactivity. No OS cache flush. HEAD and staged changes verified after every client. The host carried unrelated load (1-minute load average 8-14) that roughly doubles every launch number for both clients in some runs; the 5,000-file table entries are medians of the runs under 150 ms for both clients, and every sample is listed here. One Kiri run took 2.1 s to its first patch under that load; no Git process ran during it.",
+  "methodology": "Same disposable repositories and selected patch; actual PTY screen markers. 21 runs per client per fixture; the first run is excluded and the remaining 20 warm runs are summarized as min, p25, median, p75, max. Client order rotates every run. Navigation presses the client's move-down key every 100 ms for 12 presses and times the next visible patch. Idle Git processes are counted from Git Trace2 during 6 s of inactivity. No OS cache flush. HEAD and staged changes verified after every client. The 1-minute load average at the start of every run is recorded; the host carried unrelated load throughout, which is why quartiles are reported rather than a single median.",
   "binary_sha256": {
     "kiri": "047334bbeb5674d6b0a67c7c14311a9fd3076485f53af8a14c19b11e752b4fad",
     "gitui": "3b56a4dd3e041c85de2180c69366ed3edf73fc8efa27a3984149b74cc8f0cb29"
@@ -14,28 +14,101 @@
   "visible_patch_ms": [
     {
       "files": 100,
+      "load_1m": {
+        "n": 42,
+        "min": 9.54,
+        "p25": 13.46,
+        "median": 17.66,
+        "p75": 22.29,
+        "max": 26.71
+      },
       "kiri": {
-        "first": 29.9,
-        "warm": [
-          29.5,
-          27.7,
-          26.8,
-          42.4,
-          31.1,
-          30.0,
-          29.0
+        "first_ms": 48.75,
+        "warm": {
+          "inventory_ms": {
+            "n": 20,
+            "min": 11.29,
+            "p25": 13.02,
+            "median": 14.18,
+            "p75": 15.87,
+            "max": 60.13
+          },
+          "visible_patch_ms": {
+            "n": 20,
+            "min": 27.46,
+            "p25": 30.59,
+            "median": 31.65,
+            "p75": 36.12,
+            "max": 92.25
+          },
+          "navigation_median_ms": {
+            "n": 20,
+            "min": 1.78,
+            "p25": 1.89,
+            "median": 1.93,
+            "p75": 2.0,
+            "max": 2.81
+          }
+        },
+        "warm_samples_ms": [
+          51.37,
+          28.7,
+          48.37,
+          35.6,
+          92.25,
+          30.59,
+          31.27,
+          27.79,
+          36.12,
+          44.49,
+          33.75,
+          34.9,
+          38.35,
+          29.77,
+          32.03,
+          31.21,
+          31.15,
+          28.96,
+          30.91,
+          27.46
         ],
-        "navigation_per_run_ms": [
-          1.89,
-          1.81,
-          2.05,
-          1.89,
-          1.91,
-          1.98,
-          1.96,
-          1.87
+        "load_1m_per_run": [
+          13.46,
+          12.44,
+          13.27,
+          15.46,
+          16.62,
+          22.08,
+          21.27,
+          21.89,
+          23.18,
+          23.2,
+          23.89,
+          25.0,
+          22.51,
+          18.71,
+          17.69,
+          16.64,
+          16.02,
+          13.68,
+          12.98,
+          11.14,
+          10.2
         ],
         "idle_git_processes_per_6s": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
           1,
           1,
           1,
@@ -45,38 +118,80 @@
           1,
           1
         ],
-        "parent_rss_kib": [
-          12736,
-          12880,
-          12800,
-          12848,
-          12944,
-          12960,
-          12752,
-          12864
-        ],
-        "median": 29.5
+        "parent_rss_kib_median": 12976
       },
       "gitui": {
-        "first": 30.5,
-        "warm": [
-          20.3,
-          33.2,
-          16.4,
+        "first_ms": 51.26,
+        "warm": {
+          "inventory_ms": {
+            "n": 20,
+            "min": 14.06,
+            "p25": 17.31,
+            "median": 18.75,
+            "p75": 36.5,
+            "max": 74.1
+          },
+          "visible_patch_ms": {
+            "n": 20,
+            "min": 14.66,
+            "p25": 18.73,
+            "median": 20.18,
+            "p75": 38.33,
+            "max": 75.29
+          },
+          "navigation_median_ms": {
+            "n": 20,
+            "min": 1.51,
+            "p25": 1.66,
+            "median": 1.84,
+            "p75": 2.01,
+            "max": 2.48
+          }
+        },
+        "warm_samples_ms": [
           16.8,
-          15.3,
-          39.4,
-          16.6
+          15.65,
+          25.42,
+          40.1,
+          20.83,
+          75.29,
+          20.63,
+          32.74,
+          38.33,
+          52.76,
+          18.82,
+          38.85,
+          19.72,
+          38.51,
+          18.77,
+          18.73,
+          16.95,
+          18.94,
+          14.66,
+          18.05
         ],
-        "navigation_per_run_ms": [
-          2.48,
-          1.67,
-          2.08,
-          3.26,
-          1.64,
-          1.82,
-          1.94,
-          1.96
+        "load_1m_per_run": [
+          13.02,
+          13.6,
+          13.17,
+          14.5,
+          19.45,
+          22.29,
+          21.18,
+          23.02,
+          24.01,
+          24.33,
+          22.54,
+          26.71,
+          21.35,
+          19.77,
+          17.66,
+          17.67,
+          15.34,
+          14.13,
+          12.57,
+          11.5,
+          9.54
         ],
         "idle_git_processes_per_6s": [
           0,
@@ -86,61 +201,113 @@
           0,
           0,
           0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
           0
         ],
-        "parent_rss_kib": [
-          16096,
-          16112,
-          16096,
-          16112,
-          16208,
-          16032,
-          16048,
-          16064
-        ],
-        "median": 16.8
+        "parent_rss_kib_median": 16112
       }
     },
     {
       "files": 5000,
+      "load_1m": {
+        "n": 42,
+        "min": 5.26,
+        "p25": 6.95,
+        "median": 7.63,
+        "p75": 8.3,
+        "max": 11.15
+      },
       "kiri": {
-        "first": 154.3,
-        "warm": [
-          93.8,
-          84.6,
-          246.9,
-          234.9,
-          234.8,
-          222.5,
-          118.1,
-          106.1,
-          254.1,
-          231.9,
-          248.1,
-          219.2,
-          2099.0,
-          82.2,
-          271.2
+        "first_ms": 101.02,
+        "warm": {
+          "inventory_ms": {
+            "n": 20,
+            "min": 64.05,
+            "p25": 66.18,
+            "median": 72.63,
+            "p75": 75.4,
+            "max": 246.29
+          },
+          "visible_patch_ms": {
+            "n": 20,
+            "min": 80.69,
+            "p25": 82.71,
+            "median": 89.94,
+            "p75": 91.61,
+            "max": 263.26
+          },
+          "navigation_median_ms": {
+            "n": 20,
+            "min": 1.89,
+            "p25": 1.97,
+            "median": 2.12,
+            "p75": 2.25,
+            "max": 2.59
+          }
+        },
+        "warm_samples_ms": [
+          91.61,
+          84.54,
+          89.43,
+          82.71,
+          263.26,
+          238.7,
+          91.59,
+          82.09,
+          88.6,
+          194.07,
+          90.45,
+          80.69,
+          91.4,
+          80.8,
+          91.57,
+          83.34,
+          92.31,
+          82.68,
+          242.13,
+          82.49
         ],
-        "navigation_per_run_ms": [
-          2.09,
-          1.95,
-          2.07,
-          1.82,
-          1.81,
-          1.92,
-          1.83,
-          1.97,
-          1.82,
-          2.08,
-          1.83,
-          1.89,
-          1.92,
-          2.02,
-          2.39,
-          1.91
+        "load_1m_per_run": [
+          8.3,
+          10.04,
+          9.65,
+          9.89,
+          9.06,
+          7.35,
+          8.03,
+          8.55,
+          8.01,
+          7.15,
+          7.29,
+          7.27,
+          7.0,
+          7.13,
+          7.12,
+          7.59,
+          7.3,
+          6.6,
+          6.23,
+          5.8,
+          5.58
         ],
         "idle_git_processes_per_6s": [
+          1,
+          1,
+          1,
+          1,
+          1,
           1,
           1,
           1,
@@ -158,69 +325,80 @@
           1,
           1
         ],
-        "parent_rss_kib": [
-          19904,
-          20448,
-          19856,
-          19744,
-          19504,
-          19568,
-          19760,
-          19776,
-          20048,
-          19520,
-          20736,
-          19952,
-          20256,
-          15168,
-          19728,
-          18848
-        ],
-        "quiet_runs": [
-          93.8,
-          84.6,
-          118.1,
-          106.1,
-          82.2
-        ],
-        "median_quiet": 93.8
+        "parent_rss_kib_median": 19856
       },
       "gitui": {
-        "first": 103.2,
-        "warm": [
-          73.9,
-          79.2,
-          230.8,
-          257.1,
-          234.5,
-          226.7,
-          232.5,
-          238.1,
-          237.4,
-          232.6,
-          213.8,
-          92.9,
-          240.7,
-          331.4,
-          219.6
+        "first_ms": 222.08,
+        "warm": {
+          "inventory_ms": {
+            "n": 20,
+            "min": 67.97,
+            "p25": 72.23,
+            "median": 91.56,
+            "p75": 238.58,
+            "max": 258.88
+          },
+          "visible_patch_ms": {
+            "n": 20,
+            "min": 70.51,
+            "p25": 74.7,
+            "median": 94.0,
+            "p75": 241.1,
+            "max": 261.12
+          },
+          "navigation_median_ms": {
+            "n": 20,
+            "min": 7.62,
+            "p25": 7.77,
+            "median": 8.5,
+            "p75": 9.05,
+            "max": 9.28
+          }
+        },
+        "warm_samples_ms": [
+          70.51,
+          255.26,
+          74.64,
+          81.51,
+          75.09,
+          253.62,
+          241.1,
+          93.2,
+          220.48,
+          94.8,
+          73.87,
+          95.62,
+          74.7,
+          254.18,
+          249.38,
+          95.67,
+          72.78,
+          261.12,
+          73.44,
+          77.2
         ],
-        "navigation_per_run_ms": [
-          7.59,
-          8.11,
-          7.46,
-          7.28,
-          7.92,
+        "load_1m_per_run": [
+          8.39,
+          7.8,
+          9.36,
+          11.15,
           8.5,
-          7.65,
-          8.22,
-          7.61,
-          9.23,
-          7.63,
-          7.51,
-          7.32,
-          8.44,
-          7.35,
-          9.58
+          7.97,
+          7.95,
+          8.42,
+          7.77,
+          7.44,
+          7.74,
+          7.96,
+          6.84,
+          6.79,
+          7.68,
+          8.06,
+          6.95,
+          6.49,
+          6.29,
+          5.94,
+          5.26
         ],
         "idle_git_processes_per_6s": [
           0,
@@ -238,33 +416,14 @@
           0,
           0,
           0,
+          0,
+          0,
+          0,
+          0,
+          0,
           0
         ],
-        "parent_rss_kib": [
-          23088,
-          22224,
-          23184,
-          22752,
-          22304,
-          22832,
-          22512,
-          22656,
-          22752,
-          22160,
-          22976,
-          22336,
-          22624,
-          22992,
-          22928,
-          22704
-        ],
-        "quiet_runs": [
-          103.2,
-          73.9,
-          79.2,
-          92.9
-        ],
-        "median_quiet": 86.1
+        "parent_rss_kib_median": 22928
       }
     }
   ],
@@ -292,8 +451,16 @@
     ],
     "remaining_gap": "Launch on large change sets is bounded by Git's single-threaded index refresh inside `git status`; GitUI computes status in-process with gix on a thread pool.",
     "after_in_process_status": {
-      "100_files_median_ms": 30,
-      "5000_files_quiet_median_ms": 94,
+      "100_files_median_ms": 32,
+      "100_files_iqr_ms": [
+        30.59,
+        36.12
+      ],
+      "5000_files_median_ms": 90,
+      "5000_files_iqr_ms": [
+        82.71,
+        91.61
+      ],
       "navigation_median_ms": 2,
       "idle_git_processes_per_6s": 1,
       "remaining_gap": "The first `git diff` spawn (~17 ms) after launch; in-process diffing is the next step."
@@ -466,8 +633,7 @@
     "note": "Earlier session including Lumen 2.32; Lumen was not re-measured."
   },
   "limitations": [
-    "Small local sample on a machine with unrelated load; both clients double under it",
-    "One 2.1 s Kiri outlier under load is recorded, not explained",
+    "Single machine with unrelated background load; per-run load averages are recorded and quartiles reported",
     "No live-provider semantic accuracy or cost comparison",
     "No peak-memory or total process-tree memory comparison"
   ],
