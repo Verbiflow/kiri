@@ -1,3 +1,4 @@
+use crate::theme::{Borders, Theme};
 use kiri_ai::{
     config::{Provider, ProviderSettings, Settings},
     workflow::{CommitDraft, CommitPlan},
@@ -116,6 +117,32 @@ pub enum ProposalKind {
     Plan,
 }
 
+/// What an AI or manual commit action covers: which side of the index the evidence comes
+/// from, and which paths. `None` means every change on that side.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Scope {
+    pub side: DiffSide,
+    pub paths: Option<Vec<RepoPath>>,
+}
+
+impl Scope {
+    pub fn source(&self) -> &'static str {
+        match self.side {
+            DiffSide::Staged => "staged",
+            DiffSide::Worktree => "working-tree",
+        }
+    }
+    pub fn matches_paths(&self, paths: Option<&[RepoPath]>) -> bool {
+        match (&self.paths, paths) {
+            (None, None) => true,
+            (Some(mine), Some(theirs)) => {
+                mine.iter().collect::<HashSet<_>>() == theirs.iter().collect::<HashSet<_>>()
+            }
+            _ => false,
+        }
+    }
+}
+
 pub struct AnalysisReview {
     pub mode: kiri_ai::analysis::AnalysisMode,
     pub inspection_rounds: usize,
@@ -214,8 +241,42 @@ impl WorkspaceView {
         })
     }
 
-    pub fn draft_scope(&self) -> Option<Vec<RepoPath>> {
-        (self.side == DiffSide::Staged && self.node().is_some()).then(|| self.selected_paths())
+    /// The selected file or folder on the current tab, as a commit scope.
+    pub fn selection_scope(&self) -> Option<Scope> {
+        let paths = self.selected_paths();
+        (!paths.is_empty()).then_some(Scope {
+            side: self.side,
+            paths: Some(paths),
+        })
+    }
+
+    /// Every change listed on the current tab, honoring the filter. On the Staged tab with no
+    /// filter this is "all staged changes"; on the Working tab it is always explicit, so
+    /// staged-only files never slip into a working-tree commit.
+    pub fn tab_scope(&self) -> Option<Scope> {
+        let Load::Ready(status) = &self.status else {
+            return None;
+        };
+        if self.matching.is_empty() {
+            return None;
+        }
+        let paths = if self.side == DiffSide::Staged && self.filter.is_empty() {
+            None
+        } else {
+            Some(
+                self.matching
+                    .iter()
+                    .flat_map(|&i| {
+                        let file = &status.files[i];
+                        std::iter::once(file.path.clone()).chain(file.original_path.clone())
+                    })
+                    .collect(),
+            )
+        };
+        Some(Scope {
+            side: self.side,
+            paths,
+        })
     }
 
     pub fn review_staged(&mut self) {
@@ -440,11 +501,6 @@ pub enum Modal {
         selected: usize,
     },
     ConfirmBranch(String),
-    ConfirmStage {
-        paths: Vec<RepoPath>,
-        side: DiffSide,
-        label: String,
-    },
     History {
         entries: Vec<HistoryEntry>,
         selected: usize,
@@ -466,7 +522,6 @@ pub enum Modal {
         plan: CommitPlan,
         selected: usize,
         offset: usize,
-        confirming: bool,
     },
     PlanEdit {
         plan: CommitPlan,
@@ -477,6 +532,22 @@ pub enum Modal {
         query: String,
         selected: usize,
     },
+    /// Theme picker. Moving through the list applies the theme immediately; Esc restores
+    /// `previous`, Enter keeps and saves the current one.
+    Themes {
+        query: String,
+        selected: usize,
+        previous: &'static Theme,
+    },
+}
+
+impl Modal {
+    pub fn palette() -> Self {
+        Self::Palette {
+            query: String::new(),
+            selected: 0,
+        }
+    }
 }
 
 pub struct App {
@@ -492,6 +563,8 @@ pub struct App {
     pub dirty: bool,
     pub clear: bool,
     pub color_enabled: bool,
+    pub theme: &'static Theme,
+    pub borders: Borders,
     pub quit: bool,
     pub tick: u64,
     pub now: Instant,
@@ -520,6 +593,18 @@ impl App {
                 });
                 workspaces.len() - 1
             });
+        let theme = settings
+            .ui
+            .theme
+            .as_deref()
+            .and_then(Theme::find)
+            .unwrap_or(&crate::theme::KIRI);
+        let borders = settings
+            .ui
+            .borders
+            .as_deref()
+            .and_then(Borders::parse)
+            .unwrap_or_default();
         Self {
             workspaces: workspaces
                 .into_iter()
@@ -536,6 +621,8 @@ impl App {
             dirty: true,
             clear: false,
             color_enabled: true,
+            theme,
+            borders,
             quit: false,
             tick: 0,
             now: Instant::now(),
@@ -566,24 +653,53 @@ impl App {
     }
 
     pub fn show_draft(&mut self, draft: CommitDraft) {
-        let editor = editor(&draft.message);
+        let editor = editor(self.theme, &draft.message);
         self.current_mut().saved_draft = Some(draft.clone());
         self.modal = Modal::Draft { draft, editor };
     }
+
+    pub fn show_plan(&mut self, plan: CommitPlan) {
+        self.current_mut().saved_plan = Some(plan.clone());
+        self.modal = Modal::Plan {
+            plan,
+            selected: 0,
+            offset: 0,
+        };
+    }
+
+    /// Whether `draft` was produced for exactly `scope`, so it can be reopened instead of
+    /// recaptured.
+    pub fn draft_matches(draft: &CommitDraft, scope: &Scope) -> bool {
+        draft.snapshot.source() == scope.source() && scope.matches_paths(draft.paths.as_deref())
+    }
+
+    pub fn plan_matches(plan: &CommitPlan, scope: &Scope) -> bool {
+        plan.snapshot.source() == scope.source()
+            && match &scope.paths {
+                None => true,
+                Some(paths) => {
+                    plan.files
+                        .iter()
+                        .map(|file| &file.path)
+                        .collect::<HashSet<_>>()
+                        == paths.iter().collect()
+                }
+            }
+    }
 }
 
-pub fn editor(text: &str) -> TextArea<'static> {
+pub fn editor(theme: &Theme, text: &str) -> TextArea<'static> {
     let mut editor = TextArea::new(text.split('\n').map(str::to_owned).collect());
     editor.set_cursor_line_style(ratatui::style::Style::default());
     editor.set_style(
         ratatui::style::Style::default()
-            .fg(crate::view::TEXT)
-            .bg(crate::view::PANEL),
+            .fg(theme.text)
+            .bg(theme.panel),
     );
     editor.set_cursor_style(
         ratatui::style::Style::default()
-            .fg(crate::view::BG)
-            .bg(crate::view::ACCENT),
+            .fg(theme.bg)
+            .bg(theme.accent),
     );
     editor
 }
@@ -593,24 +709,97 @@ pub fn fuzzy_match(query: &str, text: &str) -> bool {
     query.chars().all(|q| chars.any(|c| c == q))
 }
 
-pub const ACTIONS: &[(&str, &str)] = &[
-    ("AI: message for staged selection", "a"),
-    ("AI: message for all staged files", "A"),
-    ("Show the last error", "!"),
-    ("AI: split staged changes into commits", "b"),
-    ("Write commit message", "c"),
-    ("Switch to staged changes", "s"),
-    ("Switch to working changes", "u"),
-    ("Connect or select AI provider", "P"),
-    ("Open another workspace", "w"),
-    ("Fetch remote updates", "f"),
-    ("Pull incoming commits", "d"),
-    ("Push outgoing commits", "U"),
-    ("Switch branch", "B"),
-    ("Recent commit history", "l"),
-    ("Stage / unstage selected file or folder", " "),
-    ("Toggle terminal colors", "t"),
-    ("Refresh repository", "r"),
-    ("Toggle split diff", "v"),
-    ("Keyboard shortcuts", "?"),
+/// Everything the command palette can run. Each entry names the key it mirrors, so the
+/// palette and the help panel never disagree with the keymap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Command {
+    AiCommitSelection,
+    AiCommitTab,
+    AiSplitTab,
+    WriteMessage,
+    Stage,
+    StageAll,
+    StageHunk,
+    StagedTab,
+    WorkingTab,
+    ShowError,
+    Providers,
+    Workspace,
+    Fetch,
+    Pull,
+    Push,
+    Branches,
+    History,
+    Themes,
+    NextTheme,
+    PreviousTheme,
+    CycleBorders,
+    ToggleColor,
+    ToggleSplit,
+    Refresh,
+    Help,
+    Quit,
+}
+
+pub const COMMANDS: &[(Command, &str, &str)] = &[
+    (
+        Command::AiCommitSelection,
+        "AI: commit selected file or folder",
+        "a",
+    ),
+    (
+        Command::AiCommitTab,
+        "AI: commit everything on this tab",
+        "A",
+    ),
+    (Command::AiSplitTab, "AI: split this tab into commits", "b"),
+    (
+        Command::WriteMessage,
+        "Write a commit message for the selection",
+        "c",
+    ),
+    (
+        Command::Stage,
+        "Stage / unstage selected file or folder",
+        "Space",
+    ),
+    (Command::StageAll, "Stage / unstage everything shown", "S"),
+    (Command::StageHunk, "Stage / unstage the current hunk", "H"),
+    (Command::StagedTab, "Show staged changes", "s"),
+    (Command::WorkingTab, "Show working changes", "u"),
+    (Command::Themes, "Theme picker", "T"),
+    (Command::NextTheme, "Next theme", ""),
+    (Command::PreviousTheme, "Previous theme", ""),
+    (Command::CycleBorders, "Cycle panel border style", ""),
+    (Command::ToggleColor, "Toggle terminal colors", "t"),
+    (Command::ToggleSplit, "Toggle split diff", "v"),
+    (Command::ShowError, "Show the last error", "!"),
+    (Command::Providers, "Connect or select AI provider", "P"),
+    (Command::Workspace, "Open another workspace", "w"),
+    (Command::Fetch, "Fetch remote updates", "f"),
+    (Command::Pull, "Pull incoming commits", "d"),
+    (Command::Push, "Push outgoing commits", "U"),
+    (Command::Branches, "Switch branch", "B"),
+    (Command::History, "Recent commit history", "l"),
+    (Command::Refresh, "Refresh repository", "r"),
+    (Command::Help, "Keyboard shortcuts", "?"),
+    (Command::Quit, "Quit", "q"),
 ];
+
+pub fn palette_matches(query: &str) -> Vec<&'static (Command, &'static str, &'static str)> {
+    let query = query.to_lowercase();
+    COMMANDS
+        .iter()
+        .filter(|(_, name, _)| fuzzy_match(&query, &name.to_lowercase()))
+        .collect()
+}
+
+pub fn theme_matches(query: &str) -> Vec<&'static Theme> {
+    let query = query.to_lowercase();
+    Theme::all()
+        .iter()
+        .filter(|theme| {
+            fuzzy_match(&query, &theme.name.to_lowercase()) || fuzzy_match(&query, theme.id)
+        })
+        .collect()
+}

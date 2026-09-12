@@ -9,23 +9,11 @@ use kiri_core::{
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthChar;
-
-pub const BG: Color = Color::Rgb(15, 19, 24);
-pub const PANEL: Color = Color::Rgb(20, 25, 31);
-pub const TEXT: Color = Color::Rgb(218, 224, 231);
-pub const MUTED: Color = Color::Rgb(139, 154, 172);
-pub const ACCENT: Color = Color::Rgb(114, 215, 187);
-pub const BORDER: Color = Color::Rgb(52, 69, 88);
-pub const SELECTED: Color = Color::Rgb(30, 51, 70);
-pub const ADD: Color = Color::Rgb(140, 215, 166);
-pub const REMOVE: Color = Color::Rgb(235, 155, 157);
-pub const ADD_BG: Color = Color::Rgb(22, 43, 35);
-pub const REMOVE_BG: Color = Color::Rgb(47, 29, 35);
 
 pub struct Geometry {
     pub workspaces: Rect,
@@ -63,13 +51,14 @@ pub fn geometry(area: Rect) -> Geometry {
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    let theme = app.theme;
     let area = frame.area();
     frame.render_widget(
-        Block::default().style(Style::default().bg(BG).fg(TEXT)),
+        Block::default().style(Style::default().bg(theme.bg).fg(theme.text)),
         area,
     );
     if area.width < 60 || area.height < 16 {
-        frame.render_widget(Paragraph::new("Kiri needs at least 60 columns and 16 rows.\nResize your terminal, or use `kiri status --json`.\nPress q to exit.").style(Style::default().fg(TEXT)).wrap(Wrap { trim: false }), area);
+        frame.render_widget(Paragraph::new("Kiri needs at least 60 columns and 16 rows.\nResize your terminal, or use `kiri status --json`.\nPress q to exit.").style(Style::default().fg(theme.text)).wrap(Wrap { trim: false }), area);
         return;
     }
     let workspace = app.current();
@@ -81,23 +70,23 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let provider = app
         .settings
         .active()
-        .map(|(p, s)| format!("{} / {}", p.id(), s.model))
+        .map(|(p, s)| format!("{} / {} · T {}", p.id(), s.model, app.theme.name))
         .unwrap_or_else(|_| "AI not connected · P to connect".into());
     let header = Line::from(vec![
-        Span::styled("  kiri ", Style::default().fg(ACCENT).bold()),
-        Span::styled(" / ", Style::default().fg(BORDER)),
+        Span::styled("  kiri ", Style::default().fg(theme.accent).bold()),
+        Span::styled(" / ", Style::default().fg(theme.border)),
         Span::styled(
             format!("{}  ", terminal_text(&workspace.workspace.name)),
             Style::default().bold(),
         ),
-        Span::styled(branch, Style::default().fg(ACCENT)),
+        Span::styled(branch, Style::default().fg(theme.accent)),
     ]);
     frame.render_widget(Paragraph::new(header), Rect::new(0, 1, area.width, 1));
     if area.width >= 110 {
         frame.render_widget(
             Paragraph::new(terminal_text(&provider))
                 .right_aligned()
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(theme.muted)),
             Rect::new(area.width.saturating_sub(52), 1, 50, 1),
         );
     }
@@ -126,25 +115,26 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .map(|started| {
             crate::motion::completion_color(
                 app.now.saturating_duration_since(started).as_secs_f32() / 0.6,
+                theme,
             )
         })
-        .unwrap_or(BG);
+        .unwrap_or(theme.bg);
     frame.render_widget(
         Paragraph::new(format!("  {}", terminal_text(&notice)))
-            .style(Style::default().fg(MUTED).bg(notice_bg)),
+            .style(Style::default().fg(theme.muted).bg(notice_bg)),
         Rect::new(0, area.height - 3, area.width, 1),
     );
     let keys = if workspace.side == DiffSide::Staged {
-        "  a AI message for selection   c write message   b AI split   A all staged   Space unstage   u working   ? help"
+        "  a AI commit selection   A AI commit tab   b AI split tab   Space unstage   T themes   ? help"
     } else if workspace.node().is_some_and(|node| node.is_folder()) {
-        "  Space stage folder   s review staged → a AI message   Enter expand/collapse   ← parent   A all staged   ? help"
+        "  a AI commit folder   A AI commit tab   b AI split tab   Space stage   Enter fold   T themes   ? help"
     } else if app.focus == Focus::Diff {
-        "  j/k scroll   [/] hunk   H stage hunk   Space stage file   Tab files   v split   t colors   ? help"
+        "  a AI commit file   Space stage   H stage hunk   [/] hunk   Tab files   v split   T themes   ? help"
     } else {
-        "  j/k move   Space stage file   ← parent folder   s review staged   A AI all staged   t colors   ? help"
+        "  a AI commit file   A AI commit tab   b AI split tab   Space stage   s staged   T themes   ? help"
     };
     frame.render_widget(
-        Paragraph::new(keys).style(Style::default().bg(PANEL).fg(TEXT)),
+        Paragraph::new(keys).style(Style::default().bg(theme.panel).fg(theme.text)),
         Rect::new(0, area.height - 2, area.width, 1),
     );
     crate::modals::draw(frame, app);
@@ -161,6 +151,7 @@ pub fn sync_buttons() -> [(Rect, char); 5] {
 }
 
 fn sync_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let workspace = app.current();
     let (incoming, outgoing) = match &workspace.status {
         Load::Ready(s) => (s.behind, s.ahead),
@@ -185,7 +176,7 @@ fn sync_bar(frame: &mut Frame, app: &App, area: Rect) {
     for ((rect, _), label) in sync_buttons().into_iter().zip(labels) {
         if rect.right() <= area.right() {
             frame.render_widget(
-                Paragraph::new(label).style(Style::default().fg(ACCENT).bg(SELECTED)),
+                Paragraph::new(label).style(Style::default().fg(theme.accent).bg(theme.selected)),
                 rect,
             );
         }
@@ -201,28 +192,30 @@ fn sync_bar(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(
             Paragraph::new(freshness)
                 .right_aligned()
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(theme.muted)),
             Rect::new(82, 2, area.width.saturating_sub(84), 1),
         );
     }
 }
 
-pub fn panel(title: impl Into<String>, focused: bool) -> Block<'static> {
+pub fn panel(app: &App, title: impl Into<String>, focused: bool) -> Block<'static> {
+    let theme = app.theme;
     Block::default()
         .title(format!(" {} ", title.into()))
         .title_style(
             Style::default()
-                .fg(if focused { ACCENT } else { TEXT })
+                .fg(if focused { theme.accent } else { theme.text })
                 .bold(),
         )
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if focused { ACCENT } else { BORDER }))
-        .style(Style::default().bg(PANEL).fg(TEXT))
+        .border_type(app.borders.border_type())
+        .border_style(Style::default().fg(if focused { theme.accent } else { theme.border }))
+        .style(Style::default().bg(theme.panel).fg(theme.text))
 }
 
 fn workspaces(frame: &mut Frame, app: &App, area: Rect) {
-    let block = panel("Workspaces", app.focus == Focus::Workspaces);
+    let theme = app.theme;
+    let block = panel(app, "Workspaces", app.focus == Focus::Workspaces);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let start = app
@@ -241,15 +234,15 @@ fn workspaces(frame: &mut Frame, app: &App, area: Rect) {
         let line = Line::from(vec![
             Span::styled(
                 format!(" {marker} {} ", index + 1),
-                Style::default().fg(if selected { ACCENT } else { MUTED }),
+                Style::default().fg(if selected { theme.accent } else { theme.muted }),
             ),
             Span::raw(terminal_text(&workspace.workspace.name)),
         ]);
         frame.render_widget(
             Paragraph::new(line).style(Style::default().bg(if selected {
-                SELECTED
+                theme.selected
             } else {
-                PANEL
+                theme.panel
             })),
             Rect::new(inner.x, inner.y + row as u16, inner.width, 1),
         );
@@ -257,39 +250,41 @@ fn workspaces(frame: &mut Frame, app: &App, area: Rect) {
     if inner.height >= 5 {
         frame.render_widget(
             Paragraph::new(" w  open project\n 1–9 select\n Alt ←/→ cycle")
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(theme.muted)),
             Rect::new(inner.x, inner.bottom() - 3, inner.width, 3),
         );
     }
 }
 
 fn diff(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let workspace = app.current();
     let title = workspace
         .file()
         .map(|f| f.path.display())
         .unwrap_or_else(|| "Diff".into());
     let block = panel(
+        app,
         tail(&title, area.width.saturating_sub(8) as usize),
         app.focus == Focus::Diff,
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if workspace.file().is_none() {
-        frame.render_widget(Paragraph::new("\n\n  Review at your pace.\n\n  Select a changed file to see its patch.\n  AI stays out of the way until you ask.").style(Style::default().fg(MUTED)), inner);
+        frame.render_widget(Paragraph::new("\n\n  Review at your pace.\n\n  Select a changed file to see its patch.\n  AI stays out of the way until you ask.").style(Style::default().fg(theme.muted)), inner);
         return;
     }
     let view = match &workspace.diff {
         Load::Loading => {
             frame.render_widget(
                 Paragraph::new("\n  Loading this file only…\n\n  You can keep navigating.")
-                    .style(Style::default().fg(MUTED)),
+                    .style(Style::default().fg(theme.muted)),
                 inner,
             );
             return;
         }
         Load::Failed(error) => {
-            frame.render_widget(Paragraph::new(format!("\n  {}\n\n  Press L for a longer, bounded preview.\n  Other files are still available.", terminal_text(error))).wrap(Wrap { trim: false }).style(Style::default().fg(REMOVE)), inner);
+            frame.render_widget(Paragraph::new(format!("\n  {}\n\n  Press L for a longer, bounded preview.\n  Other files are still available.", terminal_text(error))).wrap(Wrap { trim: false }).style(Style::default().fg(theme.remove)), inner);
             return;
         }
         Load::Ready(view) => view,
@@ -299,7 +294,7 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(
             Paragraph::new(format!("\n  {notice}"))
                 .wrap(Wrap { trim: false })
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(theme.muted)),
             inner,
         );
         return;
@@ -309,7 +304,7 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(
                 "\n  Binary file changed.\n\n  Space stages the file without loading its contents.",
             )
-            .style(Style::default().fg(MUTED)),
+            .style(Style::default().fg(theme.muted)),
             inner,
         );
         return;
@@ -347,9 +342,9 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
     );
     frame.render_widget(
         Paragraph::new(summary).style(Style::default().fg(if doc.truncated {
-            REMOVE
+            theme.remove
         } else {
-            MUTED
+            theme.muted
         })),
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
@@ -360,11 +355,11 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
     if split {
         let half = inner.width / 2;
         frame.render_widget(
-            Paragraph::new(format!("      {before}")).style(Style::default().fg(MUTED)),
+            Paragraph::new(format!("      {before}")).style(Style::default().fg(theme.muted)),
             Rect::new(inner.x, inner.y + 1, half, 1),
         );
         frame.render_widget(
-            Paragraph::new(format!("      {after}")).style(Style::default().fg(MUTED)),
+            Paragraph::new(format!("      {after}")).style(Style::default().fg(theme.muted)),
             Rect::new(
                 inner.x + half + 1,
                 inner.y + 1,
@@ -374,7 +369,7 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
         );
     } else {
         frame.render_widget(
-            Paragraph::new(format!(" {before} → {after}")).style(Style::default().fg(MUTED)),
+            Paragraph::new(format!(" {before} → {after}")).style(Style::default().fg(theme.muted)),
             Rect::new(inner.x, inner.y + 1, inner.width, 1),
         );
     }
@@ -394,6 +389,7 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
             let half = body.width / 2;
             render_line(
                 frame,
+                app,
                 workspace,
                 view,
                 *left,
@@ -402,6 +398,7 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
             );
             render_line(
                 frame,
+                app,
                 workspace,
                 view,
                 *right,
@@ -409,7 +406,7 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
                 Some(true),
             );
             frame.render_widget(
-                Paragraph::new("│").style(Style::default().fg(BORDER)),
+                Paragraph::new("│").style(Style::default().fg(theme.border)),
                 Rect::new(body.x + half, y, 1, 1),
             );
         } else {
@@ -418,6 +415,7 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
             }
             render_line(
                 frame,
+                app,
                 workspace,
                 view,
                 Some(index),
@@ -430,20 +428,22 @@ fn diff(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_line(
     frame: &mut Frame,
+    app: &App,
     workspace: &WorkspaceView,
     view: &DiffView,
     index: Option<usize>,
     area: Rect,
     side: Option<bool>,
 ) {
+    let theme = app.theme;
     let Some(index) = index else { return };
     let line = &view.document.lines[index];
     let (fg, mut bg) = match line.kind {
-        LineKind::Added => (ADD, ADD_BG),
-        LineKind::Removed => (REMOVE, REMOVE_BG),
-        LineKind::Hunk => (ACCENT, SELECTED),
-        LineKind::Header | LineKind::Notice => (MUTED, PANEL),
-        LineKind::Context => (TEXT, PANEL),
+        LineKind::Added => (theme.add, theme.add_bg),
+        LineKind::Removed => (theme.remove, theme.remove_bg),
+        LineKind::Hunk => (theme.accent, theme.selected),
+        LineKind::Header | LineKind::Notice => (theme.muted, theme.panel),
+        LineKind::Context => (theme.text, theme.panel),
     };
     if view
         .document
@@ -451,7 +451,7 @@ fn render_line(
         .get(workspace.hunk)
         .is_some_and(|h| h.lines.start == index)
     {
-        bg = Color::Rgb(37, 67, 66);
+        bg = theme.hunk;
     }
     let number = |n: Option<usize>| {
         n.map(|n| format!("{n:>5}"))
@@ -476,16 +476,20 @@ fn render_line(
             line.kind,
             LineKind::Context | LineKind::Added | LineKind::Removed
         ) {
-        TEXT
+        theme.text
     } else {
         fg
     };
-    let mut spans = vec![Span::styled(gutter.clone(), Style::default().fg(MUTED))];
+    let mut spans = vec![Span::styled(
+        gutter.clone(),
+        Style::default().fg(theme.muted),
+    )];
     spans.extend(crate::highlight::spans(
         &view.text[index],
         tokens,
         workspace.horizontal,
         area.width.saturating_sub(gutter.len() as u16) as usize,
+        theme,
         default,
         fg,
     ));

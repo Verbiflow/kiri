@@ -1,5 +1,8 @@
 use crate::{
-    state::{ACTIONS, App, ConnectForm, Focus, Load, Modal, editor, fuzzy_match},
+    state::{
+        App, Command, ConnectForm, Focus, Load, Modal, Scope, editor, palette_matches,
+        theme_matches,
+    },
     view::{geometry, list_start},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -31,11 +34,13 @@ pub enum Action {
     },
     Draft {
         ai: bool,
-        paths: Option<Vec<kiri_core::model::RepoPath>>,
+        scope: Scope,
     },
     Plan {
-        paths: Option<Vec<kiri_core::model::RepoPath>>,
+        scope: Scope,
     },
+    SaveTheme,
+    SaveBorders,
     Analyze,
     Commit(CommitDraft),
     Apply(CommitPlan),
@@ -103,10 +108,7 @@ pub fn key(app: &mut App, event: KeyEvent, area: Rect) -> Action {
                 return Action::None;
             }
             KeyCode::Char('p') => {
-                app.modal = Modal::Palette {
-                    query: String::new(),
-                    selected: 0,
-                };
+                app.modal = Modal::palette();
                 return Action::None;
             }
             KeyCode::Char('d') => return move_selection(app, 15, area),
@@ -115,28 +117,16 @@ pub fn key(app: &mut App, event: KeyEvent, area: Rect) -> Action {
         }
     }
     match event.code {
-        KeyCode::Char('q') => app.quit = true,
-        KeyCode::Char('?') => app.modal = Modal::Help,
-        KeyCode::Char('P' | 'p') => {
-            app.modal = Modal::Providers {
-                selected: app
-                    .settings
-                    .active
-                    .and_then(|p| Provider::ALL.iter().position(|item| *item == p))
-                    .unwrap_or(0),
-            }
-        }
-        KeyCode::Char('w') => app.modal = Modal::AddWorkspace(String::new()),
-        KeyCode::Char('r') => return Action::Refresh,
-        KeyCode::Char('t') => return Action::ToggleColor,
-        KeyCode::Char('f') => {
-            return Action::Sync {
-                action: SyncAction::Fetch,
-                target: None,
-            };
-        }
-        KeyCode::Char('B') => return Action::Branches,
-        KeyCode::Char('l') => return Action::History,
+        KeyCode::Char('q') => return run_command(app, Command::Quit, area),
+        KeyCode::Char('?') => return run_command(app, Command::Help, area),
+        KeyCode::Char('P' | 'p') => return run_command(app, Command::Providers, area),
+        KeyCode::Char('w') => return run_command(app, Command::Workspace, area),
+        KeyCode::Char('r') => return run_command(app, Command::Refresh, area),
+        KeyCode::Char('t') => return run_command(app, Command::ToggleColor, area),
+        KeyCode::Char('T') => return run_command(app, Command::Themes, area),
+        KeyCode::Char('f') => return run_command(app, Command::Fetch, area),
+        KeyCode::Char('B') => return run_command(app, Command::Branches, area),
+        KeyCode::Char('l') => return run_command(app, Command::History, area),
         KeyCode::Char('d' | 'U') => {
             if let Load::Ready(status) = &app.current().status {
                 app.modal = Modal::ConfirmSync {
@@ -151,97 +141,24 @@ pub fn key(app: &mut App, event: KeyEvent, area: Rect) -> Action {
                 };
             }
         }
-        KeyCode::Char('a' | 'A') => {
-            if event.code == KeyCode::Char('a') && app.current().draft_scope().is_none() {
-                app.notice =
-                    "Press s, select a staged file or folder, then a. A drafts all staged files."
-                        .into();
-                return Action::None;
-            }
-            return Action::Draft {
-                ai: true,
-                paths: if event.code == KeyCode::Char('A') {
-                    None
-                } else {
-                    app.current().draft_scope()
-                },
-            };
-        }
-        KeyCode::Char('!') => {
-            if let Some(message) = &app.last_error {
-                app.modal = Modal::Error(message.clone());
-            }
-        }
-        KeyCode::Char('c') => {
-            let paths = app.current().draft_scope();
-            if let Some(draft) = app.current().saved_draft.clone()
-                && paths.as_ref().is_none_or(|paths| {
-                    let expected: std::collections::HashSet<_> = paths.iter().collect();
-                    draft.paths.as_ref().is_some_and(|actual| {
-                        actual.iter().collect::<std::collections::HashSet<_>>() == expected
-                    })
-                })
-            {
-                app.show_draft(draft);
-            } else {
-                return Action::Draft { ai: false, paths };
-            }
-        }
-        KeyCode::Char('b') => {
-            let paths = app.current().draft_scope();
-            if let Some(plan) = app.current().saved_plan.clone()
-                && paths.as_ref().is_none_or(|paths| {
-                    plan.files
-                        .iter()
-                        .map(|file| &file.path)
-                        .collect::<std::collections::HashSet<_>>()
-                        == paths.iter().collect()
-                })
-            {
-                app.modal = Modal::Plan {
-                    plan,
-                    selected: 0,
-                    offset: 0,
-                    confirming: false,
-                };
-            } else {
-                return Action::Plan { paths };
-            }
-        }
+        KeyCode::Char('a') => return run_command(app, Command::AiCommitSelection, area),
+        KeyCode::Char('A') => return run_command(app, Command::AiCommitTab, area),
+        KeyCode::Char('b') => return run_command(app, Command::AiSplitTab, area),
+        KeyCode::Char('c') => return run_command(app, Command::WriteMessage, area),
+        KeyCode::Char('!') => return run_command(app, Command::ShowError, area),
         KeyCode::Char(' ') => {
             let workspace = app.current();
-            if let Some(node) = workspace.node()
-                && let Entry::Folder { path, .. } = &node.entry
-            {
-                app.modal = Modal::ConfirmStage {
-                    paths: workspace.selected_paths(),
+            let paths = workspace.selected_paths();
+            return if workspace.node().is_some_and(|node| node.is_folder()) {
+                Action::StageMany {
+                    paths,
                     side: workspace.side,
-                    label: format!("listed changes in {path}/"),
-                };
-            } else {
-                return Action::StageFile;
-            }
-        }
-        KeyCode::Char('S') => {
-            let workspace = app.current();
-            if let Load::Ready(status) = &workspace.status {
-                let paths: Vec<_> = workspace
-                    .matching
-                    .iter()
-                    .flat_map(|i| {
-                        let file = &status.files[*i];
-                        std::iter::once(file.path.clone()).chain(file.original_path.clone())
-                    })
-                    .collect();
-                if !paths.is_empty() {
-                    app.modal = Modal::ConfirmStage {
-                        paths,
-                        side: workspace.side,
-                        label: "current filtered list".into(),
-                    };
                 }
-            }
+            } else {
+                Action::StageFile
+            };
         }
+        KeyCode::Char('S') => return run_command(app, Command::StageAll, area),
         KeyCode::Char('H') => return Action::StageHunk,
         KeyCode::Char('L') => {
             return Action::LoadDiff {
@@ -264,10 +181,7 @@ pub fn key(app: &mut App, event: KeyEvent, area: Rect) -> Action {
             };
         }
         KeyCode::Char('/') => app.filtering = true,
-        KeyCode::Char('v') => {
-            app.split = !app.split;
-            app.current_mut().scroll = 0;
-        }
+        KeyCode::Char('v') => return run_command(app, Command::ToggleSplit, area),
         KeyCode::Tab | KeyCode::BackTab => {
             if geometry(area).workspaces.width == 0 {
                 app.focus = if app.focus == Focus::Files {
@@ -454,17 +368,6 @@ fn modal_key(app: &mut App, event: KeyEvent) -> Action {
             }
             _ => {}
         },
-        Modal::ConfirmStage { paths, side, .. } => {
-            if event.code == KeyCode::Esc {
-                return Action::None;
-            }
-            if event.code == KeyCode::Enter {
-                return Action::StageMany {
-                    paths: paths.clone(),
-                    side: *side,
-                };
-            }
-        }
         Modal::ConfirmBranch(name) => {
             if event.code == KeyCode::Esc {
                 return Action::None;
@@ -580,46 +483,34 @@ fn modal_key(app: &mut App, event: KeyEvent) -> Action {
             plan,
             selected,
             offset,
-            confirming,
-        } => {
-            if *confirming {
-                if event.code == KeyCode::Enter {
-                    return Action::Apply(plan.clone());
-                }
-                if event.code == KeyCode::Esc {
-                    *confirming = false;
-                }
-            } else {
-                match event.code {
-                    KeyCode::Esc => {
-                        app.current_mut().saved_plan = Some(plan.clone());
-                        return Action::None;
-                    }
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        *selected = (*selected + 1).min(plan.groups.len().saturating_sub(1));
-                        *offset = 0;
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        *selected = selected.saturating_sub(1);
-                        *offset = 0;
-                    }
-                    KeyCode::PageDown => {
-                        *offset = (*offset + 10).min(plan.files.len() + plan.groups.len() * 4)
-                    }
-                    KeyCode::PageUp => *offset = offset.saturating_sub(10),
-                    KeyCode::Char('e') => {
-                        let edit = editor(&plan.groups[*selected].message);
-                        modal = Modal::PlanEdit {
-                            plan: plan.clone(),
-                            selected: *selected,
-                            editor: edit,
-                        };
-                    }
-                    _ if ctrl_enter => *confirming = true,
-                    _ => {}
-                }
+        } => match event.code {
+            KeyCode::Esc => {
+                app.current_mut().saved_plan = Some(plan.clone());
+                return Action::None;
             }
-        }
+            KeyCode::Char('j') | KeyCode::Down => {
+                *selected = (*selected + 1).min(plan.groups.len().saturating_sub(1));
+                *offset = 0;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                *selected = selected.saturating_sub(1);
+                *offset = 0;
+            }
+            KeyCode::PageDown => {
+                *offset = (*offset + 10).min(plan.files.len() + plan.groups.len() * 4)
+            }
+            KeyCode::PageUp => *offset = offset.saturating_sub(10),
+            KeyCode::Char('e') => {
+                let edit = editor(app.theme, &plan.groups[*selected].message);
+                modal = Modal::PlanEdit {
+                    plan: plan.clone(),
+                    selected: *selected,
+                    editor: edit,
+                };
+            }
+            _ if ctrl_enter => return Action::Apply(plan.clone()),
+            _ => {}
+        },
         Modal::PlanEdit {
             plan,
             selected,
@@ -633,7 +524,6 @@ fn modal_key(app: &mut App, event: KeyEvent) -> Action {
                     plan: plan.clone(),
                     selected: *selected,
                     offset: 0,
-                    confirming: false,
                 };
             } else {
                 editor.input(event);
@@ -643,22 +533,13 @@ fn modal_key(app: &mut App, event: KeyEvent) -> Action {
             if event.code == KeyCode::Esc {
                 return Action::None;
             }
-            let filtered: Vec<_> = ACTIONS
-                .iter()
-                .filter(|(name, _)| fuzzy_match(&query.to_lowercase(), &name.to_lowercase()))
-                .collect();
+            let filtered = palette_matches(query);
             match event.code {
                 KeyCode::Down => *selected = (*selected + 1).min(filtered.len().saturating_sub(1)),
                 KeyCode::Up => *selected = selected.saturating_sub(1),
                 KeyCode::Enter => {
-                    if let Some((_, shortcut)) = filtered.get(*selected)
-                        && let Some(c) = shortcut.chars().next()
-                    {
-                        return key(
-                            app,
-                            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
-                            Rect::new(0, 0, 140, 40),
-                        );
+                    if let Some((command, _, _)) = filtered.get(*selected) {
+                        return run_command(app, *command, Rect::new(0, 0, 140, 40));
                     }
                 }
                 _ => {
@@ -667,10 +548,231 @@ fn modal_key(app: &mut App, event: KeyEvent) -> Action {
                 }
             }
         }
+        Modal::Themes {
+            query,
+            selected,
+            previous,
+        } => {
+            let filtered = theme_matches(query);
+            match event.code {
+                KeyCode::Esc => {
+                    app.theme = previous;
+                    app.clear = true;
+                    return Action::None;
+                }
+                KeyCode::Enter => return Action::SaveTheme,
+                KeyCode::Down => {
+                    *selected = (*selected + 1).min(filtered.len().saturating_sub(1));
+                }
+                KeyCode::Up => *selected = selected.saturating_sub(1),
+                KeyCode::PageDown => {
+                    *selected = (*selected + 12).min(filtered.len().saturating_sub(1));
+                }
+                KeyCode::PageUp => *selected = selected.saturating_sub(12),
+                KeyCode::Char('b') if event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.borders = app.borders.next();
+                    return Action::SaveBorders;
+                }
+                _ => {
+                    text_input(query, event);
+                    *selected = 0;
+                }
+            }
+            if let Some(theme) = theme_matches(query).get(*selected) {
+                app.theme = theme;
+                app.clear = true;
+            }
+        }
         Modal::None => {}
     }
     app.modal = modal;
     Action::None
+}
+
+fn run_command(app: &mut App, command: Command, _area: Rect) -> Action {
+    match command {
+        Command::AiCommitSelection => {
+            let Some(scope) = app.current().selection_scope() else {
+                app.notice = "Select a changed file or folder first.".into();
+                return Action::None;
+            };
+            if let Some(draft) = app.current().saved_draft.clone()
+                && App::draft_matches(&draft, &scope)
+            {
+                app.show_draft(draft);
+                Action::None
+            } else {
+                Action::Draft { ai: true, scope }
+            }
+        }
+        Command::AiCommitTab => {
+            let Some(scope) = app.current().tab_scope() else {
+                app.notice = "There are no changes on this tab.".into();
+                return Action::None;
+            };
+            if let Some(draft) = app.current().saved_draft.clone()
+                && App::draft_matches(&draft, &scope)
+            {
+                app.show_draft(draft);
+                Action::None
+            } else {
+                Action::Draft { ai: true, scope }
+            }
+        }
+        Command::AiSplitTab => {
+            let Some(scope) = app.current().tab_scope() else {
+                app.notice = "There are no changes on this tab.".into();
+                return Action::None;
+            };
+            if let Some(plan) = app.current().saved_plan.clone()
+                && App::plan_matches(&plan, &scope)
+            {
+                app.show_plan(plan);
+                Action::None
+            } else {
+                Action::Plan { scope }
+            }
+        }
+        Command::WriteMessage => {
+            let Some(scope) = app.current().selection_scope() else {
+                app.notice = "Select a changed file or folder first.".into();
+                return Action::None;
+            };
+            if let Some(draft) = app.current().saved_draft.clone()
+                && App::draft_matches(&draft, &scope)
+            {
+                app.show_draft(draft);
+                Action::None
+            } else {
+                Action::Draft { ai: false, scope }
+            }
+        }
+        Command::Stage => {
+            let workspace = app.current();
+            if workspace.node().is_some_and(|node| node.is_folder()) {
+                Action::StageMany {
+                    paths: workspace.selected_paths(),
+                    side: workspace.side,
+                }
+            } else {
+                Action::StageFile
+            }
+        }
+        Command::StageAll => {
+            let workspace = app.current();
+            let Some(scope) = workspace.tab_scope() else {
+                app.notice = "There are no changes on this tab.".into();
+                return Action::None;
+            };
+            let paths = scope.paths.unwrap_or_else(|| {
+                let Load::Ready(status) = &workspace.status else {
+                    return Vec::new();
+                };
+                workspace
+                    .matching
+                    .iter()
+                    .flat_map(|&index| {
+                        let file = &status.files[index];
+                        std::iter::once(file.path.clone()).chain(file.original_path.clone())
+                    })
+                    .collect()
+            });
+            Action::StageMany {
+                paths,
+                side: workspace.side,
+            }
+        }
+        Command::StageHunk => Action::StageHunk,
+        Command::StagedTab | Command::WorkingTab => {
+            app.current_mut().side = if command == Command::StagedTab {
+                DiffSide::Staged
+            } else {
+                DiffSide::Worktree
+            };
+            app.current_mut().selected = 0;
+            app.current_mut().rebuild_files();
+            app.current_mut().review_staged();
+            Action::LoadDiff {
+                reset: true,
+                large: false,
+            }
+        }
+        Command::ShowError => {
+            if let Some(message) = &app.last_error {
+                app.modal = Modal::Error(message.clone());
+            }
+            Action::None
+        }
+        Command::Providers => {
+            app.modal = Modal::Providers {
+                selected: app
+                    .settings
+                    .active
+                    .and_then(|provider| Provider::ALL.iter().position(|item| *item == provider))
+                    .unwrap_or(0),
+            };
+            Action::None
+        }
+        Command::Workspace => {
+            app.modal = Modal::AddWorkspace(String::new());
+            Action::None
+        }
+        Command::Fetch => Action::Sync {
+            action: SyncAction::Fetch,
+            target: None,
+        },
+        Command::Pull | Command::Push => {
+            if let Load::Ready(status) = &app.current().status {
+                app.modal = Modal::ConfirmSync {
+                    action: if command == Command::Pull {
+                        SyncAction::Pull
+                    } else {
+                        SyncAction::Push
+                    },
+                    head: status.head.clone(),
+                    branch: status.branch.clone(),
+                    upstream: status.upstream.clone(),
+                };
+            }
+            Action::None
+        }
+        Command::Branches => Action::Branches,
+        Command::History => Action::History,
+        Command::Themes => {
+            let selected = crate::theme::Theme::position(app.theme.id);
+            app.modal = Modal::Themes {
+                query: String::new(),
+                selected,
+                previous: app.theme,
+            };
+            Action::None
+        }
+        Command::NextTheme | Command::PreviousTheme => {
+            let step = if command == Command::NextTheme { 1 } else { -1 };
+            app.theme = app.theme.next(step);
+            app.clear = true;
+            Action::SaveTheme
+        }
+        Command::CycleBorders => {
+            app.borders = app.borders.next();
+            Action::SaveBorders
+        }
+        Command::ToggleColor => Action::ToggleColor,
+        Command::ToggleSplit => {
+            app.split = !app.split;
+            app.current_mut().scroll = 0;
+            Action::None
+        }
+        Command::Refresh => Action::Refresh,
+        Command::Help => {
+            app.modal = Modal::Help;
+            Action::None
+        }
+        Command::Quit => {
+            app.quit = true;
+            Action::None
+        }
+    }
 }
 
 pub fn text_input(text: &mut String, event: KeyEvent) {
@@ -762,7 +864,7 @@ pub fn mouse(app: &mut App, event: MouseEvent, area: Rect) -> Action {
     }
     if matches!(
         app.modal,
-        Modal::ConfirmSync { .. } | Modal::ConfirmBranch(_) | Modal::ConfirmStage { .. }
+        Modal::ConfirmSync { .. } | Modal::ConfirmBranch(_)
     ) && event.kind == MouseEventKind::Down(MouseButton::Left)
     {
         let (confirm, cancel) = crate::modals::confirmation_buttons(area);

@@ -241,6 +241,8 @@ def main():
                 save(args.svg, screen.svg())
             press(b"?", "Keyboard shortcuts")
             close("Keyboard shortcuts")
+            press(b"T", "62 themes")
+            close("Themes")
             press(b"P", "AI providers")
             close("AI providers")
             press(b"\x1b[<0;20;3M\x1b[<0;20;3m", "No automatic merge")
@@ -257,24 +259,21 @@ def main():
                 press(b"\x13", "Committed")
                 assert git(repo, "show", "--format=", "--name-only", "HEAD").decode().strip() == "beta.rs"
                 press(b"g", "2 working files in this folder")
-                press(b" ", "Stage 2 files?")
-                press(b"\r", "Index updated")
+                press(b" ", "Index updated")
                 expected = {"folder/one.rs", "folder/nested/two.rs"}
                 assert set(git(repo, "diff", "--cached", "--name-only").decode().splitlines()) == expected
                 press(b"s", "s Staged 2")
                 press(b"g", "2 staged files in this folder")
-                press(b" ", "Unstage 2 files?")
-                press(b"\r", "Nothing staged")
+                press(b" ", "Nothing staged")
                 assert git(repo, "diff", "--cached", "--name-only") == b""
                 assert "added" in (repo / "folder/one.rs").read_text()
                 assert "added" in (repo / "folder-other/unrelated.rs").read_text()
                 press(b"u", "╭ alpha.rs")
                 press(b" ", "s Staged 1")
                 press(b"g", "2 working files in this folder")
-                press(b" ", "Stage 2 files?")
-                press(b"\r", "s Staged 3")
+                press(b" ", "s Staged 3")
                 press(b"s", "2 staged files in this folder")
-                press(b"c", "2 selected files only")
+                press(b"c", "2 selected staged files")
                 os.write(master, b"feat: commit just the selected folder")
                 press(b"\x13", "Committed")
                 assert set(git(repo, "show", "--format=", "--name-only", "HEAD").decode().splitlines()) == expected
@@ -290,7 +289,7 @@ def main():
                     break
             process.wait(timeout=1)
             assert process.returncode == 0
-            checks = ["real PTY startup", "interactive patch", "actual ANSI color policy", "help", "provider picker", "mouse pull confirmation without execution", "branches", "history", "clean exit"]
+            checks = ["real PTY startup", "interactive patch", "actual ANSI color policy", "help", "theme picker", "provider picker", "mouse pull confirmation without execution", "branches", "history", "clean exit"]
             if args.repo is None:
                 checks.extend(["file staging", "manual commit", "collapsed folder staging", "folder unstage", "staged selection follows the folder", "folder-scoped commit preserves other staged files", "sibling and working-file preservation", "tracked changes under ignored folders", "ignored untracked files stay untracked"])
             print(json.dumps({"first_frame_ms": round(first_frame, 2), "first_patch_ms": round(first_patch, 2), "first_syntax_ms": round(first_syntax, 2) if first_syntax else None, "checks": checks}, indent=2))

@@ -48,7 +48,7 @@ fn clicking_incoming_and_confirming_uses_the_reviewed_head() {
 }
 
 #[test]
-fn bulk_stage_respects_the_filter_and_requires_confirmation() -> Result<()> {
+fn bulk_stage_respects_the_filter_and_runs_immediately() -> Result<()> {
     let mut app = app();
     let files = ["src/api.rs", "tests/api.rs", "other.rs"]
         .iter()
@@ -74,12 +74,6 @@ fn bulk_stage_respects_the_filter_and_requires_confirmation() -> Result<()> {
     let result = key(
         &mut app,
         KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
-        area,
-    );
-    assert!(matches!(result, Action::None));
-    let result = key(
-        &mut app,
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         area,
     );
     assert!(
@@ -156,17 +150,16 @@ fn folder_navigation_and_space_include_collapsed_descendants() -> Result<()> {
             .collapsed_dirs
             .contains(&RepoPath::new(b"src".to_vec())?)
     );
-    key(
+    let action = key(
         &mut app,
         KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
         area,
     );
-    let Modal::ConfirmStage { paths, label, .. } = &app.modal else {
-        anyhow::bail!("expected folder confirmation")
-    };
-    assert_eq!(paths.len(), 2);
-    assert!(label.contains("src/"));
-    assert!(paths.iter().all(|p| p.bytes().starts_with(b"src/")));
+    assert!(matches!(
+        action,
+        Action::StageMany { ref paths, side: DiffSide::Worktree }
+            if paths.len() == 2 && paths.iter().all(|path| path.bytes().starts_with(b"src/"))
+    ));
     Ok(())
 }
 
@@ -193,15 +186,10 @@ fn folder_checkbox_and_inspector_are_mouse_actions() -> Result<()> {
         row: rows.y,
         modifiers: KeyModifiers::NONE,
     };
-    mouse(&mut app, click, area);
-    assert!(matches!(app.modal, Modal::ConfirmStage { ref paths, .. } if paths.len() == 1));
-    key(
-        &mut app,
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-        area,
-    );
+    let action = mouse(&mut app, click, area);
+    assert!(matches!(action, Action::StageMany { ref paths, .. } if paths.len() == 1));
     let button = crate::file_tree::folder_buttons(geometry(area).diff, app.current().side)[0].0;
-    mouse(
+    let action = mouse(
         &mut app,
         MouseEvent {
             column: button.x + 1,
@@ -210,7 +198,7 @@ fn folder_checkbox_and_inspector_are_mouse_actions() -> Result<()> {
         },
         area,
     );
-    assert!(matches!(app.modal, Modal::ConfirmStage { .. }));
+    assert!(matches!(action, Action::StageMany { ref paths, .. } if paths.len() == 1));
     Ok(())
 }
 
@@ -250,7 +238,7 @@ fn staged_selection_drafts_only_its_paths_and_all_is_explicit() -> Result<()> {
         area,
     );
     assert!(
-        matches!(action, Action::Draft { ai: true, paths: Some(ref paths) } if paths.len() == 1 && paths[0].bytes() == b"selected/file.rs")
+        matches!(action, Action::Draft { ai: true, scope } if scope.side == DiffSide::Staged && matches!(scope.paths, Some(ref paths) if paths.len() == 1 && paths[0].bytes() == b"selected/file.rs"))
     );
     let action = key(
         &mut app,
@@ -261,7 +249,10 @@ fn staged_selection_drafts_only_its_paths_and_all_is_explicit() -> Result<()> {
         action,
         Action::Draft {
             ai: true,
-            paths: None
+            scope: crate::state::Scope {
+                side: DiffSide::Staged,
+                paths: None
+            }
         }
     ));
     let action = key(
@@ -270,7 +261,7 @@ fn staged_selection_drafts_only_its_paths_and_all_is_explicit() -> Result<()> {
         area,
     );
     assert!(
-        matches!(action, Action::Draft { ai: false, paths: Some(ref paths) } if paths.len() == 1)
+        matches!(action, Action::Draft { ai: false, scope } if scope.side == DiffSide::Staged && matches!(scope.paths, Some(ref paths) if paths.len() == 1))
     );
     Ok(())
 }
@@ -390,4 +381,110 @@ fn quit_does_not_interrupt_a_git_mutation() {
     assert!(matches!(action, Action::None));
     assert!(!app.quit);
     assert!(app.busy());
+}
+
+#[test]
+fn working_tab_ai_actions_keep_their_worktree_scope() -> Result<()> {
+    let mut app = app();
+    app.current_mut().set_status(RepoStatus {
+        files: vec![
+            FileChange {
+                path: RepoPath::new(b"src/app.rs".to_vec())?,
+                original_path: None,
+                staged: None,
+                worktree: Some(ChangeKind::Modified),
+                submodule: false,
+                head_oid: None,
+                index_oid: None,
+            },
+            FileChange {
+                path: RepoPath::new(b"README.md".to_vec())?,
+                original_path: None,
+                staged: None,
+                worktree: Some(ChangeKind::Modified),
+                submodule: false,
+                head_oid: None,
+                index_oid: None,
+            },
+        ],
+        ..RepoStatus::default()
+    });
+    let area = Rect::new(0, 0, 160, 42);
+    let selected = key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        area,
+    );
+    assert!(matches!(
+        selected,
+        Action::Draft { ai: true, scope }
+            if scope.side == DiffSide::Worktree
+                && matches!(scope.paths, Some(ref paths) if paths.len() == 1)
+    ));
+    let all = key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+        area,
+    );
+    assert!(matches!(
+        all,
+        Action::Draft { ai: true, scope }
+            if scope.side == DiffSide::Worktree
+                && matches!(scope.paths, Some(ref paths) if paths.len() == 2)
+    ));
+    let plan = key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+        area,
+    );
+    assert!(matches!(
+        plan,
+        Action::Plan { scope }
+            if scope.side == DiffSide::Worktree
+                && matches!(scope.paths, Some(ref paths) if paths.len() == 2)
+    ));
+    Ok(())
+}
+
+#[test]
+fn theme_picker_previews_then_saves_or_restores() {
+    let mut app = app();
+    let area = Rect::new(0, 0, 160, 42);
+    let original = app.theme.id;
+    key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+        area,
+    );
+    key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        area,
+    );
+    assert_ne!(app.theme.id, original);
+    key(
+        &mut app,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        area,
+    );
+    assert_eq!(app.theme.id, original);
+
+    key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+        area,
+    );
+    key(
+        &mut app,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        area,
+    );
+    let selected = app.theme.id;
+    let action = key(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        area,
+    );
+    assert!(matches!(action, Action::SaveTheme));
+    assert_eq!(app.theme.id, selected);
 }

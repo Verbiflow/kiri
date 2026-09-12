@@ -1,6 +1,6 @@
 use crate::{
-    state::{ACTIONS, App, Modal, fuzzy_match},
-    view::{ACCENT, MUTED, PANEL, SELECTED, TEXT, panel, tail},
+    state::{App, Modal, palette_matches, theme_matches},
+    view::{panel, tail},
 };
 use kiri_ai::config::Provider;
 use kiri_core::model::{terminal_message, terminal_text};
@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Style, Stylize},
-    text::Line,
+    text::{Line, Span},
     widgets::{Clear, Paragraph, Wrap},
 };
 
@@ -25,16 +25,16 @@ fn format_count(value: usize) -> String {
 }
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    let theme = app.theme;
     if matches!(app.modal, Modal::None) {
         return;
     }
     let (title, height) = match &app.modal {
-        Modal::Help => ("Keyboard shortcuts", 34),
+        Modal::Help => ("Keyboard shortcuts", 38),
         Modal::AddWorkspace(_) => ("Open workspace", 10),
         Modal::Error(_) => ("Could not finish", 18),
         Modal::ConfirmSync { action, .. } => (action.label(), 12),
         Modal::ConfirmBranch(_) => ("Switch branch", 12),
-        Modal::ConfirmStage { .. } => ("Update selected files", 12),
         Modal::ConfirmAnalysis(_) => ("Review AI analysis", 20),
         Modal::Branches { .. } => ("Local branches", 26),
         Modal::History { .. } => ("Recent history", 30),
@@ -45,11 +45,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Modal::Plan { .. } => ("Review commit plan", 30),
         Modal::PlanEdit { .. } => ("Edit group message", 20),
         Modal::Palette { .. } => ("Commands", 18),
+        Modal::Themes { .. } => ("Themes", 30),
         Modal::None => return,
     };
     let area = centered(frame.area(), 96, height);
     frame.render_widget(Clear, area);
-    let block = panel(title, true);
+    let block = panel(app, title, true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let content = Rect::new(
@@ -66,18 +67,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
             let controls = analysis_controls(frame.area());
             let deep = review.mode == kiri_ai::analysis::AnalysisMode::Deep;
             frame.render_widget(
-                Paragraph::new(" f Fast ").style(Style::default().fg(ACCENT).bg(if deep {
-                    PANEL
+                Paragraph::new(" f Fast ").style(Style::default().fg(theme.accent).bg(if deep {
+                    theme.panel
                 } else {
-                    SELECTED
+                    theme.selected
                 })),
                 controls.fast,
             );
             frame.render_widget(
-                Paragraph::new(" d Deep ").style(Style::default().fg(ACCENT).bg(if deep {
-                    SELECTED
+                Paragraph::new(" d Deep ").style(Style::default().fg(theme.accent).bg(if deep {
+                    theme.selected
                 } else {
-                    PANEL
+                    theme.panel
                 })),
                 controls.deep,
             );
@@ -87,7 +88,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 } else {
                     "Complete coverage, direct synthesis; no optional inspection loop."
                 })
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(theme.muted)),
                 Rect::new(content.x, content.y + 1, content.width, 2),
             );
             let text = format!(
@@ -115,11 +116,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 ),
             );
             frame.render_widget(
-                Paragraph::new(" Enter generate ").style(Style::default().fg(ACCENT).bg(SELECTED)),
+                Paragraph::new(" Enter generate ")
+                    .style(Style::default().fg(theme.accent).bg(theme.selected)),
                 controls.confirm,
             );
             frame.render_widget(
-                Paragraph::new(" Esc cancel ").style(Style::default().fg(MUTED)),
+                Paragraph::new(" Esc cancel ").style(Style::default().fg(theme.muted)),
                 controls.cancel,
             );
         }
@@ -157,39 +159,23 @@ pub fn draw(frame: &mut Frame, app: &App) {
             );
             frame.render_widget(
                 Paragraph::new(format!(" Enter {} ", action.label()))
-                    .style(Style::default().fg(ACCENT).bg(SELECTED)),
+                    .style(Style::default().fg(theme.accent).bg(theme.selected)),
                 confirmation_buttons(frame.area()).0,
             );
             frame.render_widget(
-                Paragraph::new(" Esc cancel ").style(Style::default().fg(MUTED)),
-                confirmation_buttons(frame.area()).1,
-            );
-        }
-        Modal::ConfirmStage { paths, side, label } => {
-            let verb = if *side == kiri_core::model::DiffSide::Worktree {
-                "Stage"
-            } else {
-                "Unstage"
-            };
-            frame.render_widget(Paragraph::new(format!("{verb} {} files?\n{}\n\nOnly these listed paths change in the index. Working files are preserved.", paths.len(), terminal_text(label))).wrap(Wrap { trim: false }), content);
-            frame.render_widget(
-                Paragraph::new(format!(" Enter {verb} "))
-                    .style(Style::default().fg(ACCENT).bg(SELECTED)),
-                confirmation_buttons(frame.area()).0,
-            );
-            frame.render_widget(
-                Paragraph::new(" Esc cancel ").style(Style::default().fg(MUTED)),
+                Paragraph::new(" Esc cancel ").style(Style::default().fg(theme.muted)),
                 confirmation_buttons(frame.area()).1,
             );
         }
         Modal::ConfirmBranch(name) => {
             frame.render_widget(Paragraph::new(format!("Switch to {}?\n\nTracked changes must be committed or stashed first.\nKiri never discards them to switch branches.", terminal_text(name))).wrap(Wrap { trim: false }), content);
             frame.render_widget(
-                Paragraph::new(" Enter switch ").style(Style::default().fg(ACCENT).bg(SELECTED)),
+                Paragraph::new(" Enter switch ")
+                    .style(Style::default().fg(theme.accent).bg(theme.selected)),
                 confirmation_buttons(frame.area()).0,
             );
             frame.render_widget(
-                Paragraph::new(" Esc cancel ").style(Style::default().fg(MUTED)),
+                Paragraph::new(" Esc cancel ").style(Style::default().fg(theme.muted)),
                 confirmation_buttons(frame.area()).1,
             );
         }
@@ -210,14 +196,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
                             terminal_text(&branch.name),
                             terminal_text(&branch.upstream)
                         ),
-                        Style::default().bg(if index == *selected { SELECTED } else { PANEL }),
+                        Style::default().bg(if index == *selected {
+                            theme.selected
+                        } else {
+                            theme.panel
+                        }),
                     )
                 })
                 .collect();
             frame.render_widget(Paragraph::new(lines), content);
             frame.render_widget(
                 Paragraph::new("j/k select   Enter switch branch   Esc close")
-                    .style(Style::default().fg(ACCENT)),
+                    .style(Style::default().fg(theme.accent)),
                 Rect::new(content.x, content.bottom() - 1, content.width, 1),
             );
         }
@@ -237,7 +227,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
                             entry.short_oid,
                             terminal_text(&entry.subject)
                         ),
-                        Style::default().bg(if index == *selected { SELECTED } else { PANEL }),
+                        Style::default().bg(if index == *selected {
+                            theme.selected
+                        } else {
+                            theme.panel
+                        }),
                     )
                 })
                 .collect();
@@ -250,13 +244,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         terminal_text(&entry.age),
                         terminal_text(&entry.refs)
                     ))
-                    .style(Style::default().fg(MUTED)),
+                    .style(Style::default().fg(theme.muted)),
                     Rect::new(content.x, content.bottom() - 4, content.width, 2),
                 );
             }
             frame.render_widget(
                 Paragraph::new("j/k select   PgUp/PgDn page   Esc close")
-                    .style(Style::default().fg(ACCENT)),
+                    .style(Style::default().fg(theme.accent)),
                 Rect::new(content.x, content.bottom() - 1, content.width, 1),
             );
         }
@@ -274,11 +268,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 "  v / L            Split view / load a large preview",
                 "  ←/→              Parent / expand folder; scroll in diff",
                 "  t                Toggle colors, overriding NO_COLOR",
+                "  T                Browse and preview themes",
                 "",
                 "COMMITS",
-                "  a                AI message for staged file/folder",
-                "  A                AI message for all staged files",
-                "  c / b            Write message / AI commit groups",
+                "  a                AI commit selected file/folder",
+                "  A                AI commit everything on this tab",
+                "  b                AI split this tab into commits",
+                "  c                Write a message for the selection",
                 "  !                Reopen the last error",
                 "  Ctrl+S           Create the reviewed commit",
                 "",
@@ -296,7 +292,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 "  Esc closes this panel. No discard or force-push shortcuts.",
             ];
             frame.render_widget(
-                Paragraph::new(text.join("\n")).style(Style::default().fg(TEXT)),
+                Paragraph::new(text.join("\n")).style(Style::default().fg(theme.text)),
                 content,
             );
         }
@@ -307,12 +303,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     Line::from(""),
                     Line::styled(
                         format!(" › {}▏", terminal_text(input)),
-                        Style::default().fg(ACCENT).bg(SELECTED),
+                        Style::default().fg(theme.accent).bg(theme.selected),
                     ),
                     Line::from(""),
                     Line::styled(
                         "Enter open   Esc cancel   ~ expands to your home directory",
-                        Style::default().fg(MUTED),
+                        Style::default().fg(theme.muted),
                     ),
                 ]),
                 content,
@@ -322,7 +318,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             let mut lines = vec![
                 Line::styled(
                     "Your account. Your models. No Kiri subscription.",
-                    Style::default().fg(MUTED),
+                    Style::default().fg(theme.muted),
                 ),
                 Line::from(""),
             ];
@@ -345,26 +341,33 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 lines.push(Line::styled(
                     label,
                     Style::default()
-                        .fg(if active { ACCENT } else { TEXT })
-                        .bg(if *selected == index { SELECTED } else { PANEL }),
+                        .fg(if active { theme.accent } else { theme.text })
+                        .bg(if *selected == index {
+                            theme.selected
+                        } else {
+                            theme.panel
+                        }),
                 ));
             }
             lines.extend([
                 Line::from(""),
                 Line::styled(
                     "Enter select / connect   e edit settings   Esc close",
-                    Style::default().fg(MUTED),
+                    Style::default().fg(theme.muted),
                 ),
                 Line::styled(
                     "API keys stay local. ChatGPT uses browser sign-in.",
-                    Style::default().fg(MUTED),
+                    Style::default().fg(theme.muted),
                 ),
             ]);
             frame.render_widget(Paragraph::new(lines), content);
         }
         Modal::Connect(form) => {
             let mut lines = vec![
-                Line::styled(form.provider.label(), Style::default().fg(ACCENT).bold()),
+                Line::styled(
+                    form.provider.label(),
+                    Style::default().fg(theme.accent).bold(),
+                ),
                 Line::from(""),
             ];
             let values = [
@@ -380,7 +383,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 "API key · blank uses saved key or environment",
             ];
             for index in 0..4 {
-                lines.push(Line::styled(labels[index], Style::default().fg(MUTED)));
+                lines.push(Line::styled(
+                    labels[index],
+                    Style::default().fg(theme.muted),
+                ));
                 lines.push(Line::styled(
                     format!(
                         " {} {}{}",
@@ -388,13 +394,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         tail(&values[index], content.width.saturating_sub(5) as usize),
                         if form.field == index { "▏" } else { "" }
                     ),
-                    Style::default().bg(if form.field == index { SELECTED } else { PANEL }),
+                    Style::default().bg(if form.field == index {
+                        theme.selected
+                    } else {
+                        theme.panel
+                    }),
                 ));
                 lines.push(Line::from(""));
             }
             lines.push(Line::styled(
                 "Tab next field   Enter save   Esc cancel",
-                Style::default().fg(ACCENT),
+                Style::default().fg(theme.accent),
             ));
             frame.render_widget(Paragraph::new(lines), content);
         }
@@ -414,35 +424,36 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     }
                 ))
                 .wrap(Wrap { trim: false })
-                .style(Style::default().fg(ACCENT)),
+                .style(Style::default().fg(theme.accent)),
                 content,
             );
         }
         Modal::Draft { draft, editor } => {
             let head = draft.snapshot.head().unwrap_or("initial commit");
+            let source = draft.snapshot.source();
             let scope = draft
                 .paths
                 .as_ref()
-                .map(|paths| format!("{} selected files only", paths.len()))
+                .map(|paths| format!("{} selected {source} files", paths.len()))
                 .unwrap_or("All staged changes".into());
             frame.render_widget(
                 Paragraph::new(format!(
                     "{scope} · {} · Review before committing",
                     &head[..head.len().min(12)]
                 ))
-                .style(Style::default().fg(MUTED)),
+                .style(Style::default().fg(theme.muted)),
                 Rect::new(content.x, content.y, content.width, 1),
             );
             if let Some(paths) = &draft.paths {
                 let mut names: Vec<_> = paths.iter().take(3).map(|path| path.display()).collect();
                 if paths.len() > 3 {
                     names.push(format!(
-                        "… {} more; Esc to inspect in Staged",
+                        "… {} more; Esc to inspect the current tab",
                         paths.len() - 3
                     ));
                 }
                 frame.render_widget(
-                    Paragraph::new(names.join("\n")).style(Style::default().fg(MUTED)),
+                    Paragraph::new(names.join("\n")).style(Style::default().fg(theme.muted)),
                     Rect::new(content.x, content.y + 1, content.width, 4),
                 );
             }
@@ -456,13 +467,24 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     content.height.saturating_sub(offset + 4),
                 ),
             );
-            let warning = draft.warnings.first().map(String::as_str).unwrap_or(
-                if draft.paths.is_some() { "Only these paths are committed. Other staged changes and working files stay untouched." } else { "All reviewed staged changes are committed. Working files stay untouched." },
-            );
+            let fallback = match (source, draft.paths.is_some()) {
+                ("working-tree", _) => {
+                    "Kiri stages and commits these reviewed files. Other index and working changes remain."
+                }
+                (_, true) => {
+                    "Only these staged paths are committed. Other staged and working changes remain."
+                }
+                _ => "All reviewed staged changes are committed. Working files remain.",
+            };
+            let warning = draft
+                .warnings
+                .first()
+                .map(String::as_str)
+                .unwrap_or(fallback);
             frame.render_widget(
                 Paragraph::new(warning)
                     .wrap(Wrap { trim: false })
-                    .style(Style::default().fg(MUTED)),
+                    .style(Style::default().fg(theme.muted)),
                 Rect::new(
                     content.x,
                     content.bottom().saturating_sub(3),
@@ -471,8 +493,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 ),
             );
             frame.render_widget(
-                Paragraph::new("Ctrl+S create commit   Esc keep draft and return")
-                    .style(Style::default().fg(ACCENT)),
+                Paragraph::new(if source == "working-tree" {
+                    "Ctrl+S stage + create commit   Esc keep draft and return"
+                } else {
+                    "Ctrl+S create commit   Esc keep draft and return"
+                })
+                .style(Style::default().fg(theme.accent)),
                 Rect::new(
                     content.x,
                     content.bottom().saturating_sub(1),
@@ -485,16 +511,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
             plan,
             selected,
             offset,
-            confirming,
         } => {
             let mut lines = vec![
                 Line::styled(
                     format!(
-                        "{} commits · {} files · file-level groups",
+                        "{} commits · {} files · {} changes",
                         plan.groups.len(),
-                        plan.files.len()
+                        plan.files.len(),
+                        plan.snapshot.source()
                     ),
-                    Style::default().fg(ACCENT),
+                    Style::default().fg(theme.accent),
                 ),
                 Line::from(""),
             ];
@@ -507,13 +533,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         terminal_text(group.message.lines().next().unwrap_or_default())
                     ),
                     Style::default()
-                        .bg(if index == *selected { SELECTED } else { PANEL })
+                        .bg(if index == *selected {
+                            theme.selected
+                        } else {
+                            theme.panel
+                        })
                         .bold(),
                 ));
                 if index == *selected {
                     lines.push(Line::styled(
                         format!("     {}", terminal_text(&group.reason)),
-                        Style::default().fg(MUTED),
+                        Style::default().fg(theme.muted),
                     ));
                     for file in plan.files.iter().filter(|f| group.files.contains(&f.id)) {
                         lines.push(Line::from(format!("     {}", file.path)));
@@ -536,13 +566,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     content.height.saturating_sub(3),
                 ),
             );
-            let footer = if *confirming {
-                "Create all these commits? Enter confirm   Esc go back"
-            } else {
-                "j/k group   PgUp/PgDn scroll   e edit message   Ctrl+S create all"
-            };
             frame.render_widget(
-                Paragraph::new(footer).style(Style::default().fg(ACCENT)),
+                Paragraph::new("j/k group   PgUp/PgDn scroll   e edit message   Ctrl+S create all")
+                    .style(Style::default().fg(theme.accent)),
                 Rect::new(
                     content.x,
                     content.bottom().saturating_sub(1),
@@ -556,7 +582,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 .map(String::as_str)
                 .unwrap_or("Review each group. Esc keeps this plan without creating commits.");
             frame.render_widget(
-                Paragraph::new(warning).style(Style::default().fg(MUTED)),
+                Paragraph::new(warning).style(Style::default().fg(theme.muted)),
                 Rect::new(
                     content.x,
                     content.bottom().saturating_sub(3),
@@ -577,7 +603,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             );
             frame.render_widget(
                 Paragraph::new("Ctrl+S save message   Esc cancel")
-                    .style(Style::default().fg(ACCENT)),
+                    .style(Style::default().fg(theme.accent)),
                 Rect::new(
                     content.x,
                     content.bottom().saturating_sub(1),
@@ -588,23 +614,103 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         Modal::Palette { query, selected } => {
             let mut lines = vec![
-                Line::styled(format!(" › {query}▏"), Style::default().fg(ACCENT)),
+                Line::styled(format!(" › {query}▏"), Style::default().fg(theme.accent)),
                 Line::from(""),
             ];
-            for (index, (name, key)) in ACTIONS
-                .iter()
-                .filter(|(name, _)| fuzzy_match(&query.to_lowercase(), &name.to_lowercase()))
-                .enumerate()
+            let matches = palette_matches(query);
+            let height = content.height.saturating_sub(2) as usize;
+            let start = crate::view::list_start(*selected, height);
+            for (index, (_, name, key)) in matches.into_iter().enumerate().skip(start).take(height)
             {
                 lines.push(Line::styled(
                     format!(
                         " {} {name:45} {key}",
                         if index == *selected { "›" } else { " " }
                     ),
-                    Style::default().bg(if index == *selected { SELECTED } else { PANEL }),
+                    Style::default().bg(if index == *selected {
+                        theme.selected
+                    } else {
+                        theme.panel
+                    }),
                 ));
             }
             frame.render_widget(Paragraph::new(lines), content);
+        }
+        Modal::Themes {
+            query, selected, ..
+        } => {
+            let matches = theme_matches(query);
+            let height = content.height.saturating_sub(4) as usize;
+            let start = crate::view::list_start(*selected, height);
+            let mut lines = vec![
+                Line::styled(format!(" › {query}▏"), Style::default().fg(theme.accent)),
+                Line::styled(
+                    format!(
+                        " {} themes · previewing {} · {} borders",
+                        crate::theme::Theme::all().len(),
+                        theme.name,
+                        app.borders.id()
+                    ),
+                    Style::default().fg(theme.muted),
+                ),
+            ];
+            for (index, candidate) in matches.iter().enumerate().skip(start).take(height) {
+                let selected = index == *selected;
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        if selected { " › " } else { "   " },
+                        Style::default().fg(theme.accent).bg(if selected {
+                            theme.selected
+                        } else {
+                            theme.panel
+                        }),
+                    ),
+                    Span::styled(
+                        "●",
+                        Style::default().fg(candidate.accent).bg(if selected {
+                            theme.selected
+                        } else {
+                            theme.panel
+                        }),
+                    ),
+                    Span::styled(
+                        format!(
+                            "  {:30} {:5} {}",
+                            candidate.name,
+                            if candidate.dark { "dark" } else { "light" },
+                            if candidate.id == theme.id {
+                                "preview"
+                            } else {
+                                ""
+                            }
+                        ),
+                        Style::default().fg(theme.text).bg(if selected {
+                            theme.selected
+                        } else {
+                            theme.panel
+                        }),
+                    ),
+                ]));
+            }
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect::new(
+                    content.x,
+                    content.y,
+                    content.width,
+                    content.height.saturating_sub(2),
+                ),
+            );
+            frame.render_widget(
+                Paragraph::new("↑/↓ preview   type to filter   Enter save   Esc restore previous")
+                    .style(Style::default().fg(theme.accent)),
+                Rect::new(
+                    content.x,
+                    content.bottom().saturating_sub(1),
+                    content.width,
+                    1,
+                ),
+            );
         }
         Modal::None => {}
     }

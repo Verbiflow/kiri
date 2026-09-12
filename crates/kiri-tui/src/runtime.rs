@@ -15,6 +15,7 @@ use kiri_ai::{
 use kiri_core::sync::{Branch, HistoryEntry, SyncAction};
 use kiri_core::{
     model::{DiffSide, FileChange, RepoPath, RepoStatus},
+    review::CaptureScope,
     storage::Store,
     workspace::{Workspace, Workspaces},
 };
@@ -303,6 +304,26 @@ impl Runtime {
                 .into();
                 self.load_diff(false, false);
             }
+            Action::SaveTheme => {
+                let id = self.app.theme.id.to_owned();
+                match Settings::update_ui(&self.store, |ui| ui.theme = Some(id.clone())) {
+                    Ok(()) => {
+                        self.app.settings.ui.theme = Some(id);
+                        self.app.notice = format!("Theme: {}", self.app.theme.name);
+                    }
+                    Err(error) => self.app.show_error(error.to_string()),
+                }
+            }
+            Action::SaveBorders => {
+                let id = self.app.borders.id().to_owned();
+                match Settings::update_ui(&self.store, |ui| ui.borders = Some(id.clone())) {
+                    Ok(()) => {
+                        self.app.settings.ui.borders = Some(id);
+                        self.app.notice = format!("Panel borders: {}", self.app.borders.id());
+                    }
+                    Err(error) => self.app.show_error(error.to_string()),
+                }
+            }
             Action::Refresh => {
                 self.app.notice = "Refreshing repository…".into();
                 self.refresh();
@@ -357,11 +378,23 @@ impl Runtime {
             _ => None,
         };
         let (message, cancellable) = match &action {
-            Action::Draft { ai: true, .. } | Action::Plan { .. } => {
-                ("Preparing staged changes for parallel analysis…", true)
-            }
-            Action::Draft { ai: false, .. } => ("Capturing the staged snapshot…", true),
-            Action::Analyze => ("Analyzing staged changes in parallel…", true),
+            Action::Draft { ai: true, scope } | Action::Plan { scope } => (
+                if scope.side == DiffSide::Staged {
+                    "Preparing staged changes for analysis…"
+                } else {
+                    "Capturing working changes for analysis…"
+                },
+                true,
+            ),
+            Action::Draft { ai: false, scope } => (
+                if scope.side == DiffSide::Staged {
+                    "Capturing the staged snapshot…"
+                } else {
+                    "Capturing working changes…"
+                },
+                true,
+            ),
+            Action::Analyze => ("Analyzing selected changes in parallel…", true),
             Action::Commit(_) => ("Creating the reviewed commit…", false),
             Action::Apply(_) => ("Creating the reviewed commits…", false),
             Action::StageFile | Action::StageHunk | Action::StageMany { .. } => {
@@ -487,15 +520,20 @@ impl Runtime {
                                     .await?;
                                 Ok(JobResult::Staged { selection, side })
                             }
-                            Action::Draft { ai: true, paths } | Action::Plan { paths } => {
+                            Action::Draft { ai: true, scope } | Action::Plan { scope } => {
                                 let client = AiClient::configured(&store)?.with_observer(observer);
-                                let snapshot = entry.capture().await?;
+                                let captured = entry
+                                    .capture_changes(match scope.side {
+                                        DiffSide::Staged => CaptureScope::Staged,
+                                        DiffSide::Worktree => CaptureScope::Worktree,
+                                    })
+                                    .await?;
                                 let options = Settings::load(&store)?.analysis;
                                 let prepared = Arc::new(
-                                    kiri_ai::analysis::prepare_snapshot(
+                                    kiri_ai::analysis::prepare_captured(
                                         repo,
-                                        snapshot,
-                                        paths.as_deref(),
+                                        captured,
+                                        scope.paths.as_deref(),
                                         options,
                                         client.observer(),
                                     )
@@ -507,9 +545,17 @@ impl Runtime {
                                     kind,
                                 }))
                             }
-                            Action::Draft { ai: false, paths } => {
-                                Ok(JobResult::Draft(entry.manual_draft(paths).await?))
-                            }
+                            Action::Draft { ai: false, scope } => Ok(JobResult::Draft(
+                                entry
+                                    .manual_draft_changes(
+                                        match scope.side {
+                                            DiffSide::Staged => CaptureScope::Staged,
+                                            DiffSide::Worktree => CaptureScope::Worktree,
+                                        },
+                                        scope.paths,
+                                    )
+                                    .await?,
+                            )),
                             Action::Analyze => {
                                 let mut pending =
                                     pending.context("No prepared AI analysis to resume")?;
@@ -761,19 +807,21 @@ impl Runtime {
                                 concurrency: prepared.options.concurrency,
                                 provider: pending.client.label(),
                             };
+                            let threshold = self.app.settings.ui.auto_approve_calls;
                             self.pending_analysis = Some(pending);
-                            self.app.modal = Modal::ConfirmAnalysis(review);
+                            if threshold > 0 && review.estimated_calls() <= threshold {
+                                self.app.notice = format!(
+                                    "Analyzing {} files · about {} model calls",
+                                    review.files,
+                                    review.estimated_calls()
+                                );
+                                self.action(Action::Analyze);
+                            } else {
+                                self.app.modal = Modal::ConfirmAnalysis(review);
+                            }
                         }
                         Ok(JobResult::Draft(draft)) => self.app.show_draft(draft),
-                        Ok(JobResult::Plan(plan)) => {
-                            self.app.current_mut().saved_plan = Some(plan.clone());
-                            self.app.modal = Modal::Plan {
-                                plan,
-                                selected: 0,
-                                offset: 0,
-                                confirming: false,
-                            };
-                        }
+                        Ok(JobResult::Plan(plan)) => self.app.show_plan(plan),
                         Ok(JobResult::Staged { selection, side }) => {
                             self.app.workspaces[workspace].pending_review =
                                 if side == DiffSide::Worktree {
@@ -782,7 +830,7 @@ impl Runtime {
                                     None
                                 };
                             self.app.notice = if side == DiffSide::Worktree {
-                                "Index updated. Moved to Staged, not deleted. s review → a AI message → Ctrl+S commit."
+                                "Index updated. Press a to write and review an AI commit, or b to split this tab."
                             } else { "Index updated. Unstaged; working files preserved." }.into();
                             self.refresh();
                         }
@@ -807,7 +855,8 @@ impl Runtime {
                             Ok(settings) => {
                                 self.app.settings = settings;
                                 self.app.notice =
-                                    "Provider connected. Press a to draft a staged commit.".into();
+                                    "Provider connected. Press a on any changed file or folder."
+                                        .into();
                             }
                             Err(error) => self.app.notice = error.to_string(),
                         },

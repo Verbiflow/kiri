@@ -1,6 +1,6 @@
 use crate::{
     state::{App, FileScan, Focus, Load},
-    view::{self, ACCENT, ADD, BORDER, MUTED, PANEL, REMOVE, SELECTED, TEXT},
+    view,
 };
 use kiri_core::{
     model::{DiffSide, terminal_text},
@@ -13,9 +13,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
-
-pub const FOLDER: ratatui::style::Color = ratatui::style::Color::Rgb(128, 179, 255);
-pub const MODIFIED: ratatui::style::Color = ratatui::style::Color::Rgb(235, 193, 112);
 
 pub fn rows_area(area: Rect) -> Rect {
     Rect::new(
@@ -42,7 +39,7 @@ pub fn tabs(area: Rect) -> [(Rect, char); 2] {
     ]
 }
 
-pub fn folder_buttons(area: Rect, side: DiffSide) -> [(Rect, char); 4] {
+pub fn folder_buttons(area: Rect, _side: DiffSide) -> [(Rect, char); 4] {
     [
         (
             Rect::new(
@@ -69,7 +66,7 @@ pub fn folder_buttons(area: Rect, side: DiffSide) -> [(Rect, char); 4] {
                 23.min(area.width.saturating_sub(6)),
                 1,
             ),
-            if side == DiffSide::Staged { 'a' } else { 's' },
+            'a',
         ),
         (
             Rect::new(
@@ -78,19 +75,20 @@ pub fn folder_buttons(area: Rect, side: DiffSide) -> [(Rect, char); 4] {
                 21.min(area.width.saturating_sub(31)),
                 1,
             ),
-            if side == DiffSide::Staged { 'c' } else { 'A' },
+            'b',
         ),
     ]
 }
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let workspace = app.current();
     let title = match workspace.scan {
         FileScan::Pending => "Changes · scanning",
         FileScan::Incomplete => "Changes · incomplete",
         FileScan::Complete => "Changes",
     };
-    frame.render_widget(view::panel(title, app.focus == Focus::Files), area);
+    frame.render_widget(view::panel(app, title, app.focus == Focus::Files), area);
     let (working, staged) = (workspace.working_count, workspace.staged_count);
     for ((rect, key), (label, count, active)) in tabs(area).into_iter().zip([
         ("Working", working, workspace.side == DiffSide::Worktree),
@@ -99,8 +97,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         frame.render_widget(
             Paragraph::new(format!(" {key} {label} {count} ")).style(
                 Style::default()
-                    .fg(if active { ACCENT } else { MUTED })
-                    .bg(if active { SELECTED } else { PANEL }),
+                    .fg(if active { theme.accent } else { theme.muted })
+                    .bg(if active { theme.selected } else { theme.panel }),
             ),
             rect,
         );
@@ -112,9 +110,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(search).style(Style::default().fg(if app.filtering {
-            ACCENT
+            theme.accent
         } else {
-            MUTED
+            theme.muted
         })),
         Rect::new(area.x + 1, area.y + 2, area.width.saturating_sub(2), 1),
     );
@@ -123,7 +121,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Load::Loading => {
             frame.render_widget(
                 Paragraph::new("\n Reading changed paths…\n Diffs load only on selection.")
-                    .style(Style::default().fg(MUTED)),
+                    .style(Style::default().fg(theme.muted)),
                 rows,
             );
         }
@@ -131,7 +129,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             frame.render_widget(
                 Paragraph::new(format!("{}\n\nPress r to retry.", terminal_text(error)))
                     .wrap(Wrap { trim: false })
-                    .style(Style::default().fg(REMOVE)),
+                    .style(Style::default().fg(theme.remove)),
                 rows,
             );
         }
@@ -149,7 +147,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                     "Working tree is clean.\n\nPress s for staged changes."
                 };
                 frame.render_widget(
-                    Paragraph::new(message).style(Style::default().fg(MUTED)),
+                    Paragraph::new(message).style(Style::default().fg(theme.muted)),
                     rows,
                 );
             }
@@ -163,7 +161,11 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             {
                 let node = &workspace.tree.nodes[index];
                 let selected = row + start == workspace.selected;
-                let bg = if selected { SELECTED } else { PANEL };
+                let bg = if selected {
+                    theme.selected
+                } else {
+                    theme.panel
+                };
                 let indent = "  ".repeat(node.depth.min(12));
                 let (marker, color, label, count) = match &node.entry {
                     Entry::Folder { path, .. } => (
@@ -172,7 +174,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                         } else {
                             "▾"
                         },
-                        FOLDER,
+                        theme.folder,
                         format!("{}/", node.name),
                         format!(" {} ", workspace.tree.members(index).len()),
                     ),
@@ -182,9 +184,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                             .map(|k| k.letter())
                             .unwrap_or(' ');
                         let color = match kind {
-                            'A' | '?' => ADD,
-                            'D' | 'U' => REMOVE,
-                            _ => MODIFIED,
+                            'A' | '?' => theme.add,
+                            'D' | 'U' => theme.remove,
+                            _ => theme.modified,
                         };
                         let marker = match kind {
                             'A' => "A",
@@ -223,14 +225,18 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                     Paragraph::new(Line::from(vec![
                         Span::styled(
                             if selected { "› " } else { "  " },
-                            Style::default().fg(ACCENT),
+                            Style::default().fg(theme.accent),
                         ),
-                        Span::styled(indent, Style::default().fg(BORDER)),
+                        Span::styled(indent, Style::default().fg(theme.border)),
                         Span::styled(format!("{marker} "), Style::default().fg(color)),
                         Span::styled(
                             name,
                             Style::default()
-                                .fg(if node.is_folder() { FOLDER } else { TEXT })
+                                .fg(if node.is_folder() {
+                                    theme.folder
+                                } else {
+                                    theme.text
+                                })
                                 .add_modifier(if selected {
                                     ratatui::style::Modifier::BOLD
                                 } else {
@@ -243,7 +249,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 );
                 if !count.is_empty() {
                     frame.render_widget(
-                        Paragraph::new(count.clone()).style(Style::default().fg(MUTED).bg(bg)),
+                        Paragraph::new(count.clone())
+                            .style(Style::default().fg(theme.muted).bg(bg)),
                         Rect::new(
                             rows.right().saturating_sub(count.len() as u16 + 4),
                             y,
@@ -255,7 +262,11 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
                 frame.render_widget(
                     Paragraph::new(badge).style(
                         Style::default()
-                            .fg(if node.staged > 0 { ADD } else { MUTED })
+                            .fg(if node.staged > 0 {
+                                theme.add
+                            } else {
+                                theme.muted
+                            })
                             .bg(bg),
                     ),
                     Rect::new(rows.right().saturating_sub(4), y, 3, 1),
@@ -275,8 +286,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     };
     if area.height >= 9 {
         frame.render_widget(
-            Paragraph::new(format!(" {action} {kind} · S all shown"))
-                .style(Style::default().fg(ACCENT)),
+            Paragraph::new(format!(" a AI commit {kind} · {action} · S all shown"))
+                .style(Style::default().fg(theme.accent)),
             Rect::new(
                 area.x + 1,
                 area.bottom() - 3,
@@ -285,7 +296,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             ),
         );
         frame.render_widget(
-            Paragraph::new(" [ ] working  [+] staged  [~] mixed").style(Style::default().fg(MUTED)),
+            Paragraph::new(" [ ] working  [+] staged  [~] mixed")
+                .style(Style::default().fg(theme.muted)),
             Rect::new(
                 area.x + 1,
                 area.bottom() - 2,
@@ -297,6 +309,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let workspace = app.current();
     let (Some(node), Load::Ready(status)) = (workspace.node(), &workspace.status) else {
         return;
@@ -305,7 +318,7 @@ pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
         return;
     };
     frame.render_widget(
-        view::panel(format!("{path}/"), app.focus == Focus::Diff),
+        view::panel(app, format!("{path}/"), app.focus == Focus::Diff),
         area,
     );
     let content = Rect::new(
@@ -326,7 +339,7 @@ pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
                     "staged"
                 }
             ),
-            Style::default().fg(FOLDER).bold(),
+            Style::default().fg(theme.folder).bold(),
         )),
         Rect::new(content.x, content.y, content.width, 1),
     );
@@ -335,7 +348,7 @@ pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
             "{} with working changes  ·  {} with staged changes",
             node.working, node.staged
         ))
-        .style(Style::default().fg(MUTED)),
+        .style(Style::default().fg(theme.muted)),
         Rect::new(content.x, content.y + 1, content.width, 1),
     );
     let action = if workspace.side == DiffSide::Worktree {
@@ -345,23 +358,20 @@ pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
     };
     let buttons = folder_buttons(area, workspace.side);
     frame.render_widget(
-        Paragraph::new(action).style(Style::default().fg(ACCENT).bg(SELECTED).bold()),
+        Paragraph::new(action).style(Style::default().fg(theme.accent).bg(theme.selected).bold()),
         buttons[0].0,
     );
     if buttons[1].0.width > 0 {
         frame.render_widget(
-            Paragraph::new(" Enter expand / fold ").style(Style::default().fg(FOLDER).bg(SELECTED)),
+            Paragraph::new(" Enter expand / fold ")
+                .style(Style::default().fg(theme.folder).bg(theme.selected)),
             buttons[1].0,
         );
     }
-    let labels = if workspace.side == DiffSide::Staged {
-        [" a AI folder message ", " c Write message "]
-    } else {
-        [" s Review staged ", " A AI all staged "]
-    };
+    let labels = [" a AI commit folder ", " b AI split tab "];
     for (index, label) in labels.into_iter().enumerate() {
         frame.render_widget(
-            Paragraph::new(label).style(Style::default().fg(ACCENT).bg(SELECTED)),
+            Paragraph::new(label).style(Style::default().fg(theme.accent).bg(theme.selected)),
             buttons[index + 2].0,
         );
     }
@@ -372,7 +382,7 @@ pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(note)
-            .style(Style::default().fg(MUTED))
+            .style(Style::default().fg(theme.muted))
             .wrap(Wrap { trim: false }),
         Rect::new(content.x, content.y + 8, content.width, 2),
     );
@@ -391,7 +401,7 @@ pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
         let kind = file.kind(workspace.side).map(|k| k.letter()).unwrap_or(' ');
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(format!(" {kind}  "), Style::default().fg(MODIFIED)),
+                Span::styled(format!(" {kind}  "), Style::default().fg(theme.modified)),
                 Span::raw(name),
             ])),
             Rect::new(list.x, list.y + row as u16, list.width, 1),
