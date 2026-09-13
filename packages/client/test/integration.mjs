@@ -53,6 +53,37 @@ test('typed sidecar stages, analyzes through host callbacks, and commits only th
   } finally { client?.dispose(); await rm(root, { recursive: true, force: true }); }
 });
 
+test('typed sidecar plans and applies an exact staged selection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiri-sdk-plan-'));
+  let client;
+  const git = (...args) => execFileSync('git', args, { cwd: root, env: environment, encoding: 'utf8' });
+  try {
+    git('init', '-q'); await mkdir(join(root, 'selected'));
+    await writeFile(join(root, 'selected', 'a.txt'), 'first\n');
+    await writeFile(join(root, 'selected', 'b.txt'), 'second\n');
+    await writeFile(join(root, 'unrelated.txt'), 'later\n');
+    git('add', '.');
+    client = await KiriClient.connect({ binary, env: environment, model: async (call) => {
+      const required = call.schema.properties.result.properties.assignments.required;
+      assert.deepEqual(required, ['u0', 'u1']);
+      return JSON.stringify({ action: 'finish', result: { commits: [
+        { message: 'feat: add the first selected change', reason: 'The first file is independently useful.' },
+        { message: 'feat: add the second selected change', reason: 'The second file is independently useful.' },
+      ], assignments: { u0: 0, u1: 1 } }, requests: [], notes: '' });
+    } });
+    const repo = await client.open(root);
+    const evidence = await repo.prepare([pathBytes('selected')], {}, undefined, 'staged');
+    const plan = await repo.plan(evidence.prepared, 'host:test-model');
+    assert.deepEqual(plan.files.map((file) => Buffer.from(file.path).toString()), ['selected/a.txt', 'selected/b.txt']);
+    await client.request({ method: 'release', prepared: evidence.prepared });
+    const commits = await repo.applyPlan(plan);
+    assert.equal(commits.length, 2);
+    assert.equal(git('show', '--format=', '--name-only', commits[0]).trim(), 'selected/a.txt');
+    assert.equal(git('show', '--format=', '--name-only', commits[1]).trim(), 'selected/b.txt');
+    assert.equal(git('diff', '--cached', '--name-only').trim(), 'unrelated.txt');
+  } finally { client?.dispose(); await rm(root, { recursive: true, force: true }); }
+});
+
 test('working-tree proposals capture privately and commit reviewed content on an unborn branch', async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiri-sdk-working-'));
   const git = (...args) => execFileSync('git', args, { cwd: root, env: environment, encoding: 'utf8' });

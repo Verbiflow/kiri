@@ -41,7 +41,8 @@ kiri -C /path/to/repo
 | `c` | Write a commit message for the selection |
 | `a` | AI commit the selected file or folder on either tab |
 | `A` | AI commit everything shown on the current tab |
-| `b` | Ask AI to split the current tab into cohesive commits |
+| `b` | Plan commits from the selected file or folder with AI |
+| `Ctrl+B` | Plan commits from all visible changes with AI |
 | `Ctrl+S` | Create the reviewed commit |
 | `T` | Preview and choose a theme |
 | `f` `d` `U` | Fetch, fast-forward pull, push |
@@ -63,7 +64,7 @@ Press `P` and connect Gemini, Anthropic, OpenAI, xAI, Azure OpenAI, Bedrock, or 
 
 A draft is a proposal. Edit it, or throw it away. On the Working tab, `a` and `A` capture the chosen files without changing the real index; `Ctrl+S` stages and commits only that reviewed scope. On the Staged tab, the same keys commit from the frozen index snapshot. Kiri checks the files, index, branch, and HEAD before every commit, then runs the normal Git hooks.
 
-`b` sends the whole current tab through the hybrid analyzer, then asks the model to group every file by purpose. The planning prompt keeps implementation with its tests and generated output, separates mechanical edits and unrelated fixes, and orders dependencies before their callers. Working-tree plans stage each reviewed group immediately before its commit; changes outside the plan remain untouched. `kiri plan` offers the same flow for staged changes from a shell.
+`b` sends the selected file or folder through the hybrid analyzer; `Ctrl+B` covers every change visible under the current filter. The model groups every file by purpose. The planning prompt keeps implementation with its tests and generated output, separates mechanical edits and unrelated fixes, and orders dependencies before their callers. Working-tree plans stage each reviewed group immediately before its commit; changes outside the plan remain untouched. `kiri plan` offers the same flow for staged changes from a shell.
 
 Selections estimated at 12 model calls or fewer start as soon as you press the AI key. Larger selections still show the cost review first. Set `ui.auto_approve_calls` in `settings.json` to another limit, or to `0` to review every AI request.
 
@@ -86,7 +87,7 @@ kiri plan --json
 
 ## Embedding
 
-The TUI is one client of a headless engine. `kiri-engine` speaks a length-prefixed, schema-checked protocol over stdio, and [`packages/client`](packages/client) is a generated TypeScript client for it.
+The TUI is one client of a headless engine. `kiri-engine` speaks a length-prefixed, schema-checked protocol over stdio, and [`packages/client`](packages/client) is a generated TypeScript client for it. Hosts can prepare an exact staged or working-tree path selection, call `repo.plan(...)` through their own model callback, review the typed `CommitPlan`, and apply it with `repo.applyPlan(...)`.
 
 ```ts
 import { KiriClient } from '@kiri/client';
