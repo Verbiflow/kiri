@@ -457,10 +457,13 @@ impl Repository {
         }
         let _lock = crate::storage::FileLock::acquire(self.git_path("kiri-operation.lock").await?)?;
         let (tracked, untracked) = self.staging_paths(paths).await?;
-        // A selection that matches nothing in the inventory is either stale
-        // ignored content, which stays untouched, or a path that no longer
-        // exists anywhere, which is a failed write the caller must hear about.
-        // Decide before the first `add` so a mixed selection changes nothing.
+        // A selection that matches nothing in the inventory is one of three
+        // things: stale ignored content, which stays untouched; a deletion
+        // that is already staged, which lives in neither the index nor the
+        // worktree but is a real row of the changeset already where the
+        // caller wants it; or a path that no longer exists anywhere, which is
+        // a failed write the caller must hear about. Decide before the first
+        // `add` so a mixed selection changes nothing.
         let unmatched: Vec<RepoPath> = paths
             .iter()
             .filter(|selected| {
@@ -473,10 +476,13 @@ impl Repository {
             .collect();
         if !unmatched.is_empty() {
             let ignored = self.ignored_paths(&unmatched).await?;
-            if let Some(missing) = unmatched
-                .iter()
-                .find(|selected| !ignored.iter().any(|found| covers(selected, found)))
-            {
+            let removed = self.staged_removals(&unmatched).await?;
+            if let Some(missing) = unmatched.iter().find(|selected| {
+                !ignored
+                    .iter()
+                    .chain(removed.iter())
+                    .any(|found| covers(selected, found))
+            }) {
                 bail!(
                     "Git: pathspec '{}' did not match any files",
                     String::from_utf8_lossy(missing.bytes())
@@ -501,6 +507,44 @@ impl Repository {
             .await?;
         }
         Ok(())
+    }
+
+    /// Deletions already staged under the selected paths: files HEAD has that
+    /// the index no longer does. `ls-files` cannot see them because they are
+    /// gone from both the index and the worktree, yet staging one again is a
+    /// no-op, not a missing file. Renames are not detected so a rename's
+    /// source counts as removed. An unborn repository has nothing to compare.
+    async fn staged_removals(&self, paths: &[RepoPath]) -> Result<Vec<RepoPath>> {
+        if self.head().await?.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut removed = Vec::new();
+        for batch in path_batches(paths)? {
+            let mut command = self.command();
+            command.args([
+                "diff",
+                "--cached",
+                "--no-renames",
+                "--diff-filter=D",
+                "--name-only",
+                "-z",
+                "--",
+            ]);
+            for path in batch {
+                command.arg(path.to_path_buf());
+            }
+            let output = checked(
+                self.execute(command, None, 16 * 1024 * 1024, Duration::from_secs(15))
+                    .await?,
+            )?;
+            for record in output
+                .split(|byte| *byte == 0)
+                .filter(|record| !record.is_empty())
+            {
+                removed.push(RepoPath::new(record.to_vec())?);
+            }
+        }
+        Ok(removed)
     }
 
     /// Ignored untracked files under the selected paths: content `stage` must never add.

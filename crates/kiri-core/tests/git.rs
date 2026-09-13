@@ -441,3 +441,84 @@ async fn staging_a_missing_path_fails_before_any_write() -> Result<()> {
     );
     Ok(())
 }
+
+/// A staged deletion is in neither the index nor the worktree, which is the
+/// same inventory miss as a path that never existed. It must not be: the row
+/// is real and already staged, and a folder or "everything" selection that
+/// happens to include it must go through.
+#[tokio::test]
+async fn staging_an_already_staged_deletion_is_a_no_op() -> Result<()> {
+    let temp = fixture()?;
+    fs::create_dir_all(temp.path().join("docs/images"))?;
+    fs::write(temp.path().join("docs/images/context.png"), "png\n")?;
+    fs::write(temp.path().join("docs/guide.md"), "guide\n")?;
+    fs::write(temp.path().join("docs/old-name.md"), "moving\n")?;
+    git(temp.path(), &["add", "."])?;
+    git(temp.path(), &["commit", "--quiet", "-m", "docs"])?;
+    // Staged deletion, staged rename, and an unstaged edit under one folder.
+    git(temp.path(), &["rm", "--quiet", "docs/images/context.png"])?;
+    git(temp.path(), &["mv", "docs/old-name.md", "docs/new-name.md"])?;
+    fs::write(temp.path().join("docs/guide.md"), "guide edited\n")?;
+    let repo = Repository::open(temp.path()).await?;
+    let index = fs::read(temp.path().join(".git/index"))?;
+
+    // Alone: nothing to do, nothing wrong, index untouched.
+    repo.stage(&[RepoPath::new(b"docs/images/context.png".to_vec())?])
+        .await?;
+    assert_eq!(fs::read(temp.path().join(".git/index"))?, index);
+    // A rename's source is a staged removal too.
+    repo.stage(&[RepoPath::new(b"docs/old-name.md".to_vec())?])
+        .await?;
+    assert_eq!(fs::read(temp.path().join(".git/index"))?, index);
+    // A path that exists nowhere still fails, still before any write.
+    let mixed = repo
+        .stage(&[
+            RepoPath::new(b"docs/guide.md".to_vec())?,
+            RepoPath::new(b"docs/missing.md".to_vec())?,
+        ])
+        .await;
+    assert!(mixed.is_err());
+    assert_eq!(fs::read(temp.path().join(".git/index"))?, index);
+
+    // The whole folder, deletion included, stages the one file that moves.
+    repo.stage(&[RepoPath::new(b"docs".to_vec())?]).await?;
+    let mut staged: Vec<String> = String::from_utf8(
+        repo.git(&["diff", "--cached", "--no-renames", "--name-status"])
+            .await?,
+    )?
+    .lines()
+    .map(str::to_owned)
+    .collect();
+    staged.sort();
+    assert_eq!(
+        staged,
+        vec![
+            "A\tdocs/new-name.md",
+            "D\tdocs/images/context.png",
+            "D\tdocs/old-name.md",
+            "M\tdocs/guide.md",
+        ]
+    );
+    assert!(
+        repo.status()
+            .await?
+            .files
+            .iter()
+            .all(|file| file.worktree.is_none())
+    );
+
+    // Unstaging the deletion restores the index entry and leaves the worktree removal.
+    repo.unstage(&[RepoPath::new(b"docs/images/context.png".to_vec())?])
+        .await?;
+    let status = repo.status().await?;
+    let Some(deleted) = status
+        .files
+        .iter()
+        .find(|file| file.path.bytes() == b"docs/images/context.png")
+    else {
+        bail!("the unstaged deletion must remain a row");
+    };
+    assert!(deleted.staged.is_none());
+    assert!(deleted.worktree.is_some());
+    Ok(())
+}
