@@ -3,10 +3,10 @@ import { Socket } from 'node:net';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import schema from './schema.json' with { type: 'json' };
 import type { Command, Request, AnalysisOptions } from './request.js';
-import type { Frame, ResultValue, CommitDraft } from './frame.js';
+import type { Frame, ResultValue, CommitDraft, CommitPlan } from './frame.js';
 export type { Command, Request, AnalysisOptions, Inspection, Comparison, RepoPath } from './request.js';
 export type CaptureScope = NonNullable<Extract<Command, { method: 'prepare' }>['scope']>;
-export type { Frame, ResultValue, CommitDraft, RepoStatus, Progress } from './frame.js';
+export type { Frame, ResultValue, CommitDraft, CommitPlan, RepoStatus, Progress } from './frame.js';
 
 export type ModelCall = Extract<Frame, { type: 'model_call' }>;
 export interface ClientOptions {
@@ -78,7 +78,7 @@ export class KiriClient {
     const id = this.next++;
     const request: Request = { id, command };
     if (!validateRequest(request)) return Promise.reject(new KiriError('invalid_request', 'Invalid Kiri request'));
-    const mutation = command.method === 'stage' || command.method === 'commit' || command.method === 'stage_all' || command.method === 'commit_message' || command.method === 'push';
+    const mutation = command.method === 'stage' || command.method === 'commit' || command.method === 'apply_plan' || command.method === 'stage_all' || command.method === 'commit_message' || command.method === 'push';
     return new Promise((resolve, reject) => {
       const controller = new AbortController();
       const abort = () => {
@@ -184,10 +184,20 @@ export class KiriRepository {
     if (reply.kind !== 'draft') throw new KiriError('protocol', 'Expected draft');
     return reply.draft;
   }
+  async plan(prepared: number, model: string, instructions = '', signal?: AbortSignal, cacheIdentity?: string): Promise<CommitPlan> {
+    const reply = await this.client.request({ method: 'propose', prepared, model, cache_identity: cacheIdentity, instructions, kind: 'plan' }, signal);
+    if (reply.kind !== 'plan') throw new KiriError('protocol', 'Expected commit plan');
+    return reply.plan;
+  }
   async commit(draft: CommitDraft): Promise<string> {
     const reply = await this.client.request({ method: 'commit', repo: this.id, draft });
     if (reply.kind !== 'committed') throw new KiriError('protocol', 'Expected commit receipt');
     return reply.oid;
+  }
+  async applyPlan(plan: CommitPlan): Promise<string[]> {
+    const reply = await this.client.request({ method: 'apply_plan', repo: this.id, plan });
+    if (reply.kind !== 'applied') throw new KiriError('protocol', 'Expected applied commit plan');
+    return reply.commits;
   }
   async close(): Promise<void> { await this.client.request({ method: 'close', repo: this.id }); }
 }

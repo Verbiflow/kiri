@@ -132,6 +132,11 @@ export type ResultValue =
       [k: string]: unknown;
     }
   | {
+      commits: string[];
+      kind: 'applied';
+      [k: string]: unknown;
+    }
+  | {
       kind: 'ok';
       [k: string]: unknown;
     };

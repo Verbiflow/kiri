@@ -121,6 +121,11 @@ export type Command =
       repo: number;
     }
   | {
+      method: 'apply_plan';
+      plan: CommitPlan;
+      repo: number;
+    }
+  | {
       method: 'cancel';
       request: number;
     }
@@ -237,4 +242,32 @@ export interface FileStamp {
   digest?: string | null;
   mode: number;
   path: RepoPath;
+}
+export interface CommitPlan {
+  files: PlanFile[];
+  groups: CommitGroup[];
+  repository: string;
+  /**
+   * Staged plans commit from a frozen index; working-tree plans stage each group's captured
+   * files right before its commit, so nothing touches the index until the plan is applied.
+   */
+  snapshot:
+    | {
+        snapshot: StagedSnapshot;
+        source: 'staged';
+      }
+    | {
+        snapshot: WorktreeSnapshot;
+        source: 'worktree';
+      };
+  warnings: string[];
+}
+export interface PlanFile {
+  id: string;
+  path: RepoPath;
+}
+export interface CommitGroup {
+  files: string[];
+  message: string;
+  reason: string;
 }
