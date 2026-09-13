@@ -263,6 +263,28 @@ fn staged_selection_drafts_only_its_paths_and_all_is_explicit() -> Result<()> {
     assert!(
         matches!(action, Action::Draft { ai: false, scope } if scope.side == DiffSide::Staged && matches!(scope.paths, Some(ref paths) if paths.len() == 1))
     );
+    let selected_plan = key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+        area,
+    );
+    assert!(
+        matches!(selected_plan, Action::Plan { scope } if scope.side == DiffSide::Staged && matches!(scope.paths, Some(ref paths) if paths.len() == 1 && paths[0].bytes() == b"selected/file.rs"))
+    );
+    let visible_plan = key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        area,
+    );
+    assert!(matches!(
+        visible_plan,
+        Action::Plan {
+            scope: crate::state::Scope {
+                side: DiffSide::Staged,
+                paths: None
+            }
+        }
+    ));
     Ok(())
 }
 
@@ -432,13 +454,24 @@ fn working_tab_ai_actions_keep_their_worktree_scope() -> Result<()> {
             if scope.side == DiffSide::Worktree
                 && matches!(scope.paths, Some(ref paths) if paths.len() == 2)
     ));
-    let plan = key(
+    let selected_plan = key(
         &mut app,
         KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
         area,
     );
     assert!(matches!(
-        plan,
+        selected_plan,
+        Action::Plan { scope }
+            if scope.side == DiffSide::Worktree
+                && matches!(scope.paths, Some(ref paths) if paths.len() == 1)
+    ));
+    let visible_plan = key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        area,
+    );
+    assert!(matches!(
+        visible_plan,
         Action::Plan { scope }
             if scope.side == DiffSide::Worktree
                 && matches!(scope.paths, Some(ref paths) if paths.len() == 2)

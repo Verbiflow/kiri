@@ -153,6 +153,10 @@ pub enum Command {
         repo: RepoId,
         draft: CommitDraft,
     },
+    ApplyPlan {
+        repo: RepoId,
+        plan: CommitPlan,
+    },
     Cancel {
         request: u32,
     },
@@ -246,6 +250,9 @@ pub enum ResultValue {
     },
     Committed {
         oid: String,
+    },
+    Applied {
+        commits: Vec<String>,
     },
     Ok,
 }

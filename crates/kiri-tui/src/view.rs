@@ -125,13 +125,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Rect::new(0, area.height - 3, area.width, 1),
     );
     let keys = if workspace.side == DiffSide::Staged {
-        "  a AI commit selection   A AI commit tab   b AI split tab   Space unstage   T themes   ? help"
+        "  a AI commit selection   b plan selection   ^B plan visible   Space unstage   T themes   ? help"
     } else if workspace.node().is_some_and(|node| node.is_folder()) {
-        "  a AI commit folder   A AI commit tab   b AI split tab   Space stage   Enter fold   T themes   ? help"
+        "  a AI commit folder   b plan folder   ^B plan visible   Space stage   Enter fold   T themes   ? help"
     } else if app.focus == Focus::Diff {
         "  a AI commit file   Space stage   H stage hunk   [/] hunk   Tab files   v split   T themes   ? help"
     } else {
-        "  a AI commit file   A AI commit tab   b AI split tab   Space stage   s staged   T themes   ? help"
+        "  a AI commit file   b plan file   ^B plan visible   Space stage   s staged   T themes   ? help"
     };
     frame.render_widget(
         Paragraph::new(keys).style(Style::default().bg(theme.panel).fg(theme.text)),

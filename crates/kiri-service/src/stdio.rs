@@ -667,6 +667,27 @@ where
                             .await;
                     });
                 }
+                Command::ApplyPlan { repo, plan } => {
+                    let entry = match session.repo(repo).await {
+                        Ok(entry) => entry,
+                        Err(error) => {
+                            session.reply(id, Err(error)).await;
+                            continue;
+                        }
+                    };
+                    let operation = entry.apply_plan(plan, |_, _| {});
+                    let session = session.clone();
+                    writes.spawn(async move {
+                        session
+                            .reply(
+                                id,
+                                operation
+                                    .await
+                                    .map(|commits| ResultValue::Applied { commits }),
+                            )
+                            .await;
+                    });
+                }
                 Command::Prepare {
                     repo,
                     scope,

@@ -830,7 +830,7 @@ impl Runtime {
                                     None
                                 };
                             self.app.notice = if side == DiffSide::Worktree {
-                                "Index updated. Press a to write and review an AI commit, or b to split this tab."
+                                "Index updated. Press a for one commit, or b to plan commits from this selection."
                             } else { "Index updated. Unstaged; working files preserved." }.into();
                             self.refresh();
                         }

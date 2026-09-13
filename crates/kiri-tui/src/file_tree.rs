@@ -368,7 +368,7 @@ pub fn folder(frame: &mut Frame, app: &App, area: Rect) {
             buttons[1].0,
         );
     }
-    let labels = [" a AI commit folder ", " b AI split tab "];
+    let labels = [" a AI commit folder ", " b plan folder "];
     for (index, label) in labels.into_iter().enumerate() {
         frame.render_widget(
             Paragraph::new(label).style(Style::default().fg(theme.accent).bg(theme.selected)),

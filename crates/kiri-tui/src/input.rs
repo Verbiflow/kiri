@@ -111,6 +111,7 @@ pub fn key(app: &mut App, event: KeyEvent, area: Rect) -> Action {
                 app.modal = Modal::palette();
                 return Action::None;
             }
+            KeyCode::Char('b') => return run_command(app, Command::AiPlanVisible, area),
             KeyCode::Char('d') => return move_selection(app, 15, area),
             KeyCode::Char('u') => return move_selection(app, -15, area),
             _ => {}
@@ -143,7 +144,7 @@ pub fn key(app: &mut App, event: KeyEvent, area: Rect) -> Action {
         }
         KeyCode::Char('a') => return run_command(app, Command::AiCommitSelection, area),
         KeyCode::Char('A') => return run_command(app, Command::AiCommitTab, area),
-        KeyCode::Char('b') => return run_command(app, Command::AiSplitTab, area),
+        KeyCode::Char('b') => return run_command(app, Command::AiPlanSelection, area),
         KeyCode::Char('c') => return run_command(app, Command::WriteMessage, area),
         KeyCode::Char('!') => return run_command(app, Command::ShowError, area),
         KeyCode::Char(' ') => {
@@ -619,9 +620,23 @@ fn run_command(app: &mut App, command: Command, _area: Rect) -> Action {
                 Action::Draft { ai: true, scope }
             }
         }
-        Command::AiSplitTab => {
+        Command::AiPlanSelection => {
+            let Some(scope) = app.current().selection_scope() else {
+                app.notice = "Select changed files or a folder first.".into();
+                return Action::None;
+            };
+            if let Some(plan) = app.current().saved_plan.clone()
+                && App::plan_matches(&plan, &scope)
+            {
+                app.show_plan(plan);
+                Action::None
+            } else {
+                Action::Plan { scope }
+            }
+        }
+        Command::AiPlanVisible => {
             let Some(scope) = app.current().tab_scope() else {
-                app.notice = "There are no changes on this tab.".into();
+                app.notice = "There are no visible changes to plan.".into();
                 return Action::None;
             };
             if let Some(plan) = app.current().saved_plan.clone()

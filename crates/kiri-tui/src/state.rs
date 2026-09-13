@@ -715,7 +715,8 @@ pub fn fuzzy_match(query: &str, text: &str) -> bool {
 pub enum Command {
     AiCommitSelection,
     AiCommitTab,
-    AiSplitTab,
+    AiPlanSelection,
+    AiPlanVisible,
     WriteMessage,
     Stage,
     StageAll,
@@ -752,7 +753,16 @@ pub const COMMANDS: &[(Command, &str, &str)] = &[
         "AI: commit everything on this tab",
         "A",
     ),
-    (Command::AiSplitTab, "AI: split this tab into commits", "b"),
+    (
+        Command::AiPlanSelection,
+        "AI: plan commits from selected changes",
+        "b",
+    ),
+    (
+        Command::AiPlanVisible,
+        "AI: plan commits from all visible changes",
+        "Ctrl+B",
+    ),
     (
         Command::WriteMessage,
         "Write a commit message for the selection",
