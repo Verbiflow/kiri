@@ -23,6 +23,7 @@ struct InspectingPlanner {
     active: AtomicUsize,
     peak: AtomicUsize,
     omit_unit: bool,
+    recover: bool,
 }
 impl LanguageModel for InspectingPlanner {
     fn identity(&self) -> String {
@@ -50,10 +51,12 @@ impl LanguageModel for InspectingPlanner {
             if self.rounds.fetch_add(1, Ordering::SeqCst) == 0 {
                 return Ok(serde_json::json!({"action":"inspect","result":null,"requests":self.requests,"notes":"Read the behavior omitted from summaries."}).to_string());
             }
-            anyhow::ensure!(
-                input.contains("API_TRUTH_923") && input.contains("DOC_TRUTH_184"),
-                "Original source facts were not reopened"
-            );
+            if !input.contains("CORRECTION") {
+                anyhow::ensure!(
+                    input.contains("API_TRUTH_923") && input.contains("DOC_TRUTH_184"),
+                    "Original source facts were not reopened"
+                );
+            }
             #[derive(serde::Deserialize)]
             struct Unit {
                 id: String,
@@ -65,26 +68,21 @@ impl LanguageModel for InspectingPlanner {
                 .and_then(|rest| rest.lines().next())
                 .context("Commit unit catalog")?;
             let units: Vec<Unit> = serde_json::from_str(catalog)?;
-            let api: Vec<_> = units
+            let mut assignments: std::collections::BTreeMap<_, _> = units
                 .iter()
-                .filter(|unit| unit.path.contains("api"))
-                .map(|unit| unit.id.clone())
+                .map(|unit| (unit.id.clone(), usize::from(unit.path.contains("docs"))))
                 .collect();
-            let mut docs: Vec<_> = units
-                .iter()
-                .filter(|unit| unit.path.contains("docs"))
-                .map(|unit| unit.id.clone())
-                .collect();
-            if self.omit_unit {
-                docs.pop();
+            if self.omit_unit && (!self.recover || !input.contains("CORRECTION")) {
+                assignments.pop_last();
             }
-            Ok(serde_json::json!({"action":"finish","result":{"groups":[{"message":"feat: implement the API behavior","reason":"Keep the API and its tests together","files":api},{"message":"docs: explain the new workflow","reason":"Keep documentation and its checks together","files":docs}]},"requests":[],"notes":""}).to_string())
+            Ok(serde_json::json!({"action":"finish","result":{"commits":[{"message":"feat: implement the API behavior","reason":"Keep the API and its tests together"},{"message":"docs: explain the new workflow","reason":"Keep documentation and its checks together"}],"assignments":assignments},"requests":[],"notes":""}).to_string())
         })
     }
 }
 fn inspecting_planner(
     prepared: &PreparedAnalysis,
     omit_unit: bool,
+    recover: bool,
 ) -> Result<Arc<InspectingPlanner>> {
     let mut requests = Vec::new();
     for path in [b"feature/api.rs".as_slice(), b"feature/docs.md".as_slice()] {
@@ -118,6 +116,7 @@ fn inspecting_planner(
         active: AtomicUsize::new(0),
         peak: AtomicUsize::new(0),
         omit_unit,
+        recover,
     }))
 }
 
@@ -163,7 +162,7 @@ async fn hybrid_generated_folder_plan_inspects_sources_then_creates_exact_commit
         )
         .await?,
     );
-    let model = inspecting_planner(&prepared, false)?;
+    let model = inspecting_planner(&prepared, false, false)?;
     let runtime = Arc::new(AnalysisRuntime {
         model: model.clone(),
         worker: model.clone(),
@@ -178,7 +177,17 @@ async fn hybrid_generated_folder_plan_inspects_sources_then_creates_exact_commit
     assert!(model.summaries.load(Ordering::SeqCst) > 1);
     assert!((2..=4).contains(&model.peak.load(Ordering::SeqCst)));
     assert_eq!(git(temp.path(), &["rev-parse", "HEAD"])?, head);
-    let invalid = inspecting_planner(&prepared, true)?;
+    let recovered = inspecting_planner(&prepared, true, true)?;
+    let runtime = Arc::new(AnalysisRuntime {
+        model: recovered.clone(),
+        worker: recovered.clone(),
+        cache: Arc::new(NoCache),
+        observer: silent(),
+    });
+    let repaired = proposal::plan(&repo, prepared.clone(), runtime, "").await?;
+    assert_eq!(repaired.groups.len(), 2);
+    assert_eq!(recovered.rounds.load(Ordering::SeqCst), 3);
+    let invalid = inspecting_planner(&prepared, true, false)?;
     let runtime = Arc::new(AnalysisRuntime {
         model: invalid.clone(),
         worker: invalid,
@@ -189,7 +198,10 @@ async fn hybrid_generated_folder_plan_inspects_sources_then_creates_exact_commit
         Ok(_) => bail!("An incomplete generated plan was accepted"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("omitted"));
+    assert!(
+        error.to_string().contains("complete commit plan"),
+        "{error:#}"
+    );
     assert_eq!(git(temp.path(), &["rev-parse", "HEAD"])?, head);
     let saved = temp.path().join(".git/hybrid-plan.json");
     fs::write(&saved, serde_json::to_vec(&plan)?)?;
