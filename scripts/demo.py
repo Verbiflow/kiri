@@ -123,6 +123,7 @@ fn missing_workspaces_return_an_error() {
     assert!(Workspace::open(PathBuf::from("/missing/harbor-workspace")).is_err());
 }
 ''')
+    put(".gitignore", "/target\n")
     git("add", "tests/search.rs")
     if len(sys.argv) == 3 and sys.argv[1] == "--run":
         binary = str(Path(sys.argv[2]).resolve())

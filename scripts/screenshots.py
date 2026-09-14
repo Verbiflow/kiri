@@ -4,6 +4,11 @@
 
 Frames are captured with the terminal emulator from verify_tui.py, written as SVG,
 and rasterized at 2x with headless Chrome when it is installed.
+
+AI screens are captured against a scripted model: a local HTTP server that speaks
+the OpenAI Responses protocol and answers every request with a fixed draft or plan
+for the demo repository. Kiri runs its real capture, cost estimate, review, and
+guard code; only the model text is canned. No request leaves the machine.
 """
 import argparse
 import copy
@@ -21,7 +26,9 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,18 +38,98 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 BG = "#0f1318"
 CELL_W, CELL_H, FONT = 8.43, 19, 14  # Menlo advance at 14px
 PAD, RADIUS = 18, 12
+CTRL_B, CTRL_S = b"\x02", b"\x13"
+
+DRAFT = (
+    "search: rank matches and ignore blank queries\n\n"
+    "Lower-case both sides before matching, score prefix matches above\n"
+    "substring matches, and cap results at 50. A blank query now returns\n"
+    "nothing instead of every path."
+)
+PLAN = [
+    ("search: rank matches and ignore blank queries",
+     "src/search.rs is a self-contained change to matching and ordering.",
+     ["src/search.rs"]),
+    ("workspace: open a workspace from its root path",
+     "Workspace::open and the test that covers it ship together.",
+     ["src/workspace.rs", "tests/workspace.rs"]),
+    ("chore: ignore the target directory",
+     "Unrelated to the code changes; keep it out of both feature commits.",
+     [".gitignore"]),
+]
 
 SHOTS = [
-    # name, terminal size, [(keys, text to wait for), ...]
-    ("review", (150, 38), []),
-    ("folder", (120, 34), [(b"k", "working files in this folder")]),
-    ("providers", (120, 34), [(b"P", "AI providers")]),
-    ("commit", (120, 34), [
-        (b"s", "Staged"),
-        (b"c", "Review commit"),
-        (b"test: cover case-insensitive and blank search queries\r\rBlank queries used to match every path. Lock in the new behaviour and\rcheck that matching ignores case.", "ignores case"),
-    ]),
+    # name, terminal size, settings.json for the scripted model (None = AI not connected), [(keys, text to wait for), ...]
+    ("review", (150, 38), {}, []),
+    ("plan", (150, 38), {}, [(CTRL_B, "Review commit plan")]),
+    ("draft", (120, 34), {}, [(b"a", "Review commit")]),
+    ("cost", (120, 34), {"ui": {"auto_approve_calls": 0}}, [(CTRL_B, "Review AI analysis")]),
+    ("providers", (120, 34), None, [(b"P", "AI providers")]),
+    ("themes", (120, 34), {}, [(b"T", "Themes")]),
 ]
+
+
+def strings(value):
+    """Every string inside a JSON value, in document order."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+
+
+class ScriptedModel(BaseHTTPRequestHandler):
+    """OpenAI Responses endpoint that returns the canned draft or plan above."""
+
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        result = request["text"]["format"]["schema"]["properties"]["result"]["properties"]
+        prompt = "\n".join(strings(request["input"]))
+        if "commits" in result:
+            catalog = json.loads(re.search(r"COMMIT UNITS\n(\[.*\])", prompt).group(1))
+            assignments = {}
+            for unit in catalog:
+                index = next((i for i, (_, _, paths) in enumerate(PLAN) if any(unit["path"].endswith(p) for p in paths)), len(PLAN) - 1)
+                assignments[unit["id"]] = index
+            output = {"commits": [{"message": m, "reason": r} for m, r, _ in PLAN], "assignments": assignments}
+        else:
+            output = {"message": DRAFT}
+        text = json.dumps({"action": "finish", "result": output, "requests": [], "notes": ""})
+        body = json.dumps({
+            "id": "resp_demo", "object": "response", "created_at": 0, "status": "completed", "model": request.get("model", "demo"),
+            "output": [{"type": "message", "id": "msg_demo", "role": "assistant", "status": "completed",
+                        "content": [{"type": "output_text", "text": text, "annotations": []}]}],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def scripted_model():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ScriptedModel)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_port}"
+
+
+def connect(config, endpoint, overrides):
+    """Write settings and a placeholder key so the TUI treats the scripted model as a connected provider."""
+    config = Path(config)
+    config.mkdir(parents=True, exist_ok=True)
+    settings = {"active": "openai", "providers": {"openai": {"model": "gpt-5-mini", "endpoint": endpoint}}}
+    for key, value in overrides.items():
+        settings.setdefault(key, {}).update(value)
+    (config / "settings.json").write_text(json.dumps(settings))
+    (config / "credentials.json").write_text(json.dumps({"openai": {"type": "api_key", "key": "scripted-model"}}))
+    os.chmod(config / "credentials.json", 0o600)
 
 
 def demo_repository():
@@ -50,14 +137,19 @@ def demo_repository():
     return json.loads(subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True).stdout)
 
 
-def capture(binary, width, height, steps):
+def capture(binary, width, height, settings, steps):
     info = demo_repository()
+    server = None
+    if settings is not None:
+        server, endpoint = scripted_model()
+        connect(info["config"], endpoint, settings)
     screen = Screen(width, height)
     transcript = bytearray()
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
     env = dict(os.environ, KIRI_CONFIG_DIR=info["config"], TERM="xterm-256color", COLORTERM="truecolor")
     env.pop("NO_COLOR", None)
+    env.pop("OPENAI_API_KEY", None)
     process = subprocess.Popen([str(binary), "-C", info["repository"]], stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True)
     os.close(slave)
 
@@ -114,6 +206,8 @@ def capture(binary, width, height, steps):
                 process.kill()
             process.wait()
         os.close(master)
+        if server is not None:
+            server.shutdown()
 
 
 BOX = {
@@ -223,10 +317,10 @@ def main():
     args = parser.parse_args()
     binary = Path(args.binary).resolve()
     args.out.mkdir(parents=True, exist_ok=True)
-    for name, (width, height), steps in SHOTS:
+    for name, (width, height), settings, steps in SHOTS:
         if args.only and name not in args.only:
             continue
-        screen = capture(binary, width, height, steps)
+        screen = capture(binary, width, height, settings, steps)
         content, total_w, total_h = svg(screen)
         svg_path = args.out / f"{name}.svg"
         svg_path.write_text(content)
