@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center">The Git client where a model proposes the commits and you approve them.</p>
+<p align="center">Fast, AI-native Git TUI.</p>
 
 <p align="center">
   <img src="assets/screenshots/plan.png" alt="Kiri's commit plan review: four changed files grouped into three commits, each with a message and a reason, waiting for Ctrl+S" width="960">
