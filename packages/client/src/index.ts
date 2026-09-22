@@ -21,6 +21,9 @@ export class KiriError extends Error {
 }
 type Pending = { resolve: (result: ResultValue) => void; reject: (error: Error) => void; controller: AbortController; mutation: boolean; cleanup: () => void };
 const MAX_FRAME = 16 * 1024 * 1024;
+// Interactive reads must settle even if the engine remains alive. Analysis and
+// admitted Git writes have separate lifetimes and are never timed out/replayed.
+const BOUNDED_READS = new Set<Command['method']>(['open', 'close', 'status', 'preview', 'compare', 'log', 'commit_files', 'files', 'search', 'operation']);
 const ajv = new Ajv2020({ strict: true });
 for (const [name, maximum] of Object.entries({ uint8: 255, uint32: 4_294_967_295, uint64: Number.MAX_SAFE_INTEGER, uint: Number.MAX_SAFE_INTEGER })) {
   ajv.addFormat(name, { type: 'number', validate: (value: number) => Number.isSafeInteger(value) && value >= 0 && value <= maximum });
@@ -44,6 +47,7 @@ export class KiriClient {
     this.child = spawn(options.binary, options.cacheDirectory ? ['--cache-dir', options.cacheDirectory] : [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: options.env });
     this.child.stdin.on('error', () => this.fail('Kiri transport disconnected'));
     this.child.stdout.on('error', () => this.fail('Kiri transport disconnected'));
+    this.child.stdout.once('end', () => this.fail('Kiri response transport closed'));
     this.child.stderr.resume();
     this.child.stdout.on('data', (bytes: Buffer) => this.consume(bytes));
     this.child.once('error', () => this.fail('Could not start the Kiri engine'));
@@ -79,13 +83,19 @@ export class KiriClient {
     const request: Request = { id, command };
     if (!validateRequest(request)) return Promise.reject(new KiriError('invalid_request', 'Invalid Kiri request'));
     const mutation = command.method === 'stage' || command.method === 'commit' || command.method === 'apply_plan' || command.method === 'stage_all' || command.method === 'commit_message' || command.method === 'push';
+    if (!signal && BOUNDED_READS.has(command.method)) signal = AbortSignal.timeout(30_000);
     return new Promise((resolve, reject) => {
       const controller = new AbortController();
       const abort = () => {
         if (mutation) return;
+        if (command.method === 'cancel') {
+          this.fail('Kiri engine did not acknowledge cancellation');
+          return;
+        }
         controller.abort(); this.pending.delete(id); signal?.removeEventListener('abort', abort);
-        void this.request({ method: 'cancel', request: id }).catch(() => undefined);
-        reject(new KiriError('cancelled', 'Read or analysis cancelled'));
+        void this.request({ method: 'cancel', request: id }, AbortSignal.timeout(5000)).catch(() => undefined);
+        const timedOut = signal?.reason instanceof DOMException && signal.reason.name === 'TimeoutError';
+        reject(new KiriError(timedOut ? 'timeout' : 'cancelled', timedOut ? 'Kiri did not answer the Git read within its time limit' : 'Read or analysis cancelled'));
       };
       signal?.addEventListener('abort', abort, { once: true });
       if (this.child.stdout instanceof Socket) this.child.stdout.ref();

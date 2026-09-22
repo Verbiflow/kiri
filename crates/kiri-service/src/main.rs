@@ -1,8 +1,19 @@
 use anyhow::{Context, Result, bail};
 use std::{path::PathBuf, sync::Arc};
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(run());
+    // Tokio's stdin uses a blocking read that cannot be cancelled. Once the
+    // protocol has drained admitted mutations, do not let that read keep a
+    // failed transport alive until the parent happens to close its input.
+    runtime.shutdown_background();
+    result
+}
+
+async fn run() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     match args.next().as_deref() {
         Some(arg) if arg == "--schema" => {

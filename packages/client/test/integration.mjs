@@ -11,6 +11,29 @@ const binary = process.env.KIRI_ENGINE_BINARY ?? fileURLToPath(new URL('../../..
 const pathBytes = (path) => [...Buffer.from(path)];
 const environment = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'SDK Test', GIT_AUTHOR_EMAIL: 'sdk@example.invalid', GIT_COMMITTER_NAME: 'SDK Test', GIT_COMMITTER_EMAIL: 'sdk@example.invalid' };
 
+test('oversized responses fail the request and leave the engine usable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiri-sdk-frame-'));
+  let client;
+  let deadline;
+  try {
+    execFileSync('git', ['init', '-q', root], { env: environment });
+    // Under grep's 16 MiB byte budget, over the wire budget after JSON escaping.
+    await writeFile(join(root, 'large.txt'), 'needle' + '\\'.repeat(9 * 1024 * 1024) + '\n');
+    client = await KiriClient.connect({ binary, env: environment });
+    const repo = await client.open(root);
+    const result = client.request({ method: 'search', repo: repo.id, term: 'needle', case_sensitive: true, whole_word: false, regex: false });
+    await assert.rejects(Promise.race([
+      result,
+      new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Engine left the request pending')), 5000); }),
+    ]), (error) => error instanceof KiriError && error.code === 'operation_failed' && /transport budget/.test(error.message));
+    assert.equal((await client.discover(root)).root, repo.root);
+  } finally {
+    clearTimeout(deadline);
+    client?.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('typed sidecar stages, analyzes through host callbacks, and commits only the reviewed selection', async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiri-sdk-'));
   let client;

@@ -407,9 +407,28 @@ where
     });
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
-            let bytes = serde_json::to_vec(&frame)?;
+            let mut bytes = serde_json::to_vec(&frame)?;
             if bytes.len() > MAX_FRAME_BYTES {
-                bail!("Response frame exceeds the transport budget");
+                let (id, code) = match frame {
+                    Frame::Reply { id, result } => (
+                        id,
+                        if matches!(
+                            result,
+                            ResultValue::Committed { .. } | ResultValue::Applied { .. }
+                        ) {
+                            ErrorCode::OutcomeUnknown
+                        } else {
+                            ErrorCode::OperationFailed
+                        },
+                    ),
+                    Frame::Error { id, code, .. } => (id, code),
+                    _ => bail!("Response frame exceeds the transport budget"),
+                };
+                bytes = serde_json::to_vec(&Frame::Error {
+                    id,
+                    code,
+                    message: "Response exceeds the transport budget. Narrow the request; inspect Git state before retrying a write.".into(),
+                })?;
             }
             output.write_u32(bytes.len() as u32).await?;
             output.write_all(&bytes).await?;
@@ -421,7 +440,7 @@ where
     let mut writes = JoinSet::new();
     let mut ready = false;
     let mut last_request = 0;
-    let outcome = async {
+    let input_loop = async {
         loop {
             let length = match input.read_u32().await {
                 Ok(length) => length as usize,
@@ -478,8 +497,13 @@ where
                     continue;
                 }
             };
-            if let Command::Hello { version, schema_hash } = request.command {
-                if version != VERSION || schema_hash.as_deref() != schema()?["schema_hash"].as_str() {
+            if let Command::Hello {
+                version,
+                schema_hash,
+            } = request.command
+            {
+                if version != VERSION || schema_hash.as_deref() != schema()?["schema_hash"].as_str()
+                {
                     session
                         .output
                         .send(Frame::Error {
@@ -515,7 +539,9 @@ where
                     if let Some((_, reply)) = session.callbacks.lock().await.remove(&call) {
                         let result = match result {
                             ModelResult::Text { text } if text.len() <= 1024 * 1024 => Ok(text),
-                            ModelResult::Error { code: Some(code), .. } if code == "context" => Err(kiri_analysis::ContextOverflow.into()),
+                            ModelResult::Error {
+                                code: Some(code), ..
+                            } if code == "context" => Err(kiri_analysis::ContextOverflow.into()),
                             ModelResult::Error { message, .. } => Err(anyhow::anyhow!(
                                 "{}",
                                 message.chars().take(2000).collect::<String>()
@@ -772,8 +798,13 @@ where
             while writes.try_join_next().is_some() {}
         }
         Ok::<_, anyhow::Error>(())
-    }
-    .await;
+    };
+    // The reader must not outlive the writer. Otherwise a failed/oversized
+    // response leaves an apparently live engine silently swallowing requests.
+    let outcome = tokio::select! {
+        outcome = input_loop => outcome,
+        _ = session.output.closed() => Err(anyhow::anyhow!("Kiri response transport closed")),
+    };
     drop(reads);
     session.callbacks.lock().await.clear();
     while writes.join_next().await.is_some() {}
